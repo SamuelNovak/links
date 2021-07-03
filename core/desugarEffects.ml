@@ -318,6 +318,7 @@ let cleanup_effects tycon_env =
                  | Open _, []
                  | Recursive _, [] ->
                      (* might need an extra check on recursive rows *)
+                    (* TODO is this correct *)
                      ( name,
                        Present
                          (SourceCode.WithPos.make ~pos
@@ -354,6 +355,49 @@ let cleanup_effects tycon_env =
        self#row (fields, var)
   end)
     #datatype
+
+(* experiment: translate to ftree *)
+type ftree = FTType of ftree
+           | FTArrow of ftree list * Datatype.row * ftree
+           | FTClosed
+           [@@deriving show]
+
+let to_ftree (dt : Datatype.with_pos) : ftree
+  = let o =
+      object (o : 'self_type)
+        inherit SugarTraversals.fold as super
+
+        val tree : ftree = FTClosed
+        method ftr = tree
+        method with_tree tree = {< tree >}
+
+        method! datatype dt =
+          let open Datatype in
+          let open SourceCode.WithPos in
+          let do_fun a e r =
+            let a = List.map (fun x ->
+                        let o = o#with_tree FTClosed in
+                        let o = o#datatype x in
+                        o#ftr
+                      ) a in
+            let e = e in
+            let r = let o = o#with_tree FTClosed in
+                    let o = o#datatype r in
+                    o#ftr
+            in
+            (a, e, r)
+          in
+          let { node ; _ } = dt in
+          match node with
+          | Function (a, e, r)
+            | Lolli (a, e, r) ->
+             let a, e, r = do_fun a e r in
+             o#with_tree (FTArrow (a, e, r))
+          | dt -> o#with_tree (FTType (super#datatypenode dt)#ftr)
+      end
+    in
+    let o = o#datatype dt in
+    o#ftr
 
 (** Gathers some information about type names, used for later analysis.
     Precondition: cleanup_effects ran on this type. *)
@@ -524,6 +568,20 @@ let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
     =
   let dt = cleanup_effects tycon_env dt in
   let row_operations = gather_operations tycon_env allow_fresh dt in
+  let ftr = to_ftree dt in
+  print_endline @@ show_ftree ftr;
+  let _ = RowVarMap.map (fun v -> print_endline "HERE";
+                                  StringMap.iter (
+                                      fun n c -> let c = Lazy.force c in
+                                                 (* let c = match Unionfind.find c with
+                                                  *   | Types.Var (c,_,_) -> c
+                                                  *   | _ -> failwith "[**]"
+                                                  * in *)
+                                                 let c = Types.Meta c in
+                                                 let pol = fun () -> Types.Print.{ (default_policy ()) with hide_fresh=false} in
+                                                 let c = Types.string_of_datatype ~policy:pol c in
+                                                 print_endline (n ^ " :=> " ^ c)
+                                    ) v) row_operations in
   let shared_effect =
     match shared_effect with
     | None when allow_fresh && has_effect_sugar () ->
@@ -781,6 +839,7 @@ class main_traversal simple_tycon_env =
       in
       (o, (fields, rv))
 
+    (* (Samo) I think this function propagates operation labels down through the datatype, after they've been collected in a previous traversal *)
     method effect_row ((fields, rv) : Datatype.row) =
       let dpos = SourceCode.Position.dummy in
       let fields =
