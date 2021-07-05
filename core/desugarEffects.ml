@@ -393,7 +393,7 @@ let to_ftree (dt : Datatype.with_pos) : ftree
             | Lolli (a, e, r) ->
              let a, e, r = do_fun a e r in
              o#with_tree (FTArrow (a, e, r))
-          | dt -> o#with_tree (FTType (super#datatypenode dt)#ftr)
+          | dt -> o#with_tree ((super#datatypenode dt)#ftr)
       end
     in
     let o = o#datatype dt in
@@ -578,7 +578,7 @@ let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
                                                   *   | _ -> failwith "[**]"
                                                   * in *)
                                                  let c = Types.Meta c in
-                                                 let pol = fun () -> Types.Print.{ (default_policy ()) with hide_fresh=false} in
+                                                 let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
                                                  let c = Types.string_of_datatype ~policy:pol c in
                                                  print_endline (n ^ " :=> " ^ c)
                                     ) v) row_operations in
