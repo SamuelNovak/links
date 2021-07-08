@@ -3901,3 +3901,68 @@ let pp_tycon_spec : Format.formatter -> tycon_spec -> unit = fun fmt t ->
 let unwrap_list_type = function
   | Application ({Abstype.id = "List"; _}, [PrimaryKind.Type, t]) -> t
   | _ -> assert false
+
+
+module Wellformed = struct
+  module SymbolTypes = struct
+    type s = [ `Absent | `Alias | `Application | `Choice | `Closed | `Dual | `Effect | `End
+               | `ForAll | `Function | `Input | `Lens | `Lolli | `Meta | `Not_typed | `Output
+               | `Present | `Primitive | `Record | `Recursive | `RecursiveApplication | `Row
+               | `Select | `Table | `Var | `Variant ]
+    and t = s * typ
+    and d = [ `Point of t | `Map of any * any | `Tup of any list ]
+    and any = T of t | D of d | F
+
+    let of_typ : typ -> t
+      = fun x ->
+      let s = match x with
+        | Not_typed              -> `Not_typed
+        | Var _                  -> `Var
+        | Recursive _            -> `Recursive
+        | Alias _                -> `Alias
+        | Application _          -> `Application
+        | RecursiveApplication _ -> `RecursiveApplication
+        | Meta _                 -> `Meta
+        | Primitive _            -> `Primitive
+        | Function _             -> `Function
+        | Lolli _                -> `Lolli
+        | Record _               -> `Record
+        | Variant _              -> `Variant
+        | Table _                -> `Table
+        | Lens _                 -> `Lens
+        | ForAll _               -> `ForAll
+        | Effect _               -> `Effect
+        | Row _                  -> `Row
+        | Closed                 -> `Closed
+        | Absent                 -> `Absent
+        | Present _              -> `Present
+        | Input _                -> `Input
+        | Output _               -> `Output
+        | Select _               -> `Select
+        | Choice _               -> `Choice
+        | Dual _                 -> `Dual
+        | End                    -> `End
+      in
+      (s, x)
+
+    let tup : any list -> any
+      = fun lst -> D (`Tup lst)
+
+    let extract_nonterminal_typ : typ -> any
+      = function
+      | Recursive (_,_,tp) -> tup [F; F; T (of_typ tp)]
+      | Alias ((_,_,tyargs,_),tp) -> 
+  end
+
+  module Rule = struct
+    let module S = SymbolTypes
+    type t = Nullary of S.t
+           | Unary of S.t * S.t
+           | Tup of S.t * (S.t list)
+           | Rec of S.t *
+  end
+
+  class checker = object (o : 'self_type)
+    inherit Transform.visitor as super
+  end
+end
