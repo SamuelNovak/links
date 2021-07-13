@@ -1066,8 +1066,16 @@ vfield:
 | CONSTRUCTOR                                                  { ($1, present) }
 | CONSTRUCTOR fieldspec                                        { ($1, $2)      }
 
+/* efields: */
+/* | fields_def(efield, erow_var, kinded_row_var)                  { $1 } */
+/* fields_def(field_prod, row_var_prod, kinded_row_var_prod): */
 efields:
-| fields_def(efield, row_var, kinded_row_var)                  { $1 }
+  | efield                                                   { ([$1], Datatype.Closed) }
+| soption(efield) VBAR DOT                                   { ($1, Datatype.Closed) }
+| soption(efield) VBAR row_var                        { ( $1 , $3             ) }
+| soption(efield) VBAR kinded_row_var                 { ( $1 , $3             ) }
+| efield COMMA efields  { ( $1::fst $3, snd $3 ) }
+
 
 efield:
 | effect_label                                                 { ($1, present) }
@@ -1096,6 +1104,10 @@ nonrec_row_var:
 row_var:
 | nonrec_row_var                                               { $1 }
 | LPAREN MU VARIABLE DOT fields RPAREN                         { Datatype.Recursive (named_typevar $3 `Rigid, $5) }
+
+erow_var:
+| DOT { Datatype.Closed }
+| row_var { $1 }
 
 kinded_nonrec_row_var:
 | nonrec_row_var subkind                                       { attach_row_subkind ($1, $2) }
