@@ -1,0 +1,73 @@
+# Example of a tree-based map structure using effects and handlers
+# Demonstrates effect sugar as well
+
+typename Ord = [| Lower
+                | Greater
+                | Equal |];
+
+# Note that Order will have an implicit effect added by desugaring, the real type is:
+# Order(a,e::Eff) = (a, a) ~e~> Ord;
+typename Order(a) = (a, a) ~> Ord;
+typename Tree(a, b) = mu t. (left:Maybe(t), key:a, value:b, right:Maybe(t));
+
+# sugar, real type is Map(a, b, e::Eff) = (ord:Order(a,{ |e}), tree:Maybe(a, b))
+typename Map(a, b) = (ord:Order(a), tree:Maybe(Tree(a,b)));
+
+# make_map : (Order (a,{ |e})) -> Map (a,b,{ |e})
+sig make_map : (Order(a)) -> Map(a, b)
+fun make_map(ord) {
+  (ord=ord, tree=Nothing)
+}
+
+# find_tree_opt : (Order (a,{ |e}), a, Tree (a,b)) ~e~> Maybe (b)
+sig find_tree_opt : (Order(a), a, Tree(a,b)) ~> Maybe(b)
+fun find_tree_opt(ord, key, tree) {
+  switch (ord(key, tree.key)) {
+    case Equal   -> Just(tree.value)
+    case Lower   ->
+      switch (tree.left) {
+        case Nothing -> Nothing
+        case Just(left) -> find_tree_opt(ord, key, left)
+      }
+    case Greater ->
+      switch (tree.right) {
+        case Nothing -> Nothing
+        case Just(right) -> find_tree_opt(ord, key, right)
+      }
+  }
+}
+
+# ref_map : (a, Map(a,b,{ |e})) { |e}~> Maybe(b)
+sig ref_map : (a, Map(a,b)) ~> Maybe(b)
+fun ref_map(key, mp) {
+  var (ord=ord, tree=tree) = mp;
+  switch (tree) {
+    case Nothing -> Nothing
+    case Just(tree) -> find_tree_opt(ord, key, tree)
+  }
+}
+
+# TODO rebalancing
+sig upd_tree : (Order(a), a, b, Maybe(Tree(a,b))) ~> Tree(a,b)
+fun upd_tree(ord, key, value, tree) {
+  switch (tree) {
+    case Nothing -> (key=key, value=value, left=Nothing, right=Nothing)
+    case Just(tree) ->
+      switch (ord(key, tree.key)) {
+        case Equal   -> (tree with value=value)
+        case Lower   -> (tree with left=Just(upd_tree(ord, key, value, tree.left)))
+        case Greater -> (tree with right=Just(upd_tree(ord, key, value, tree.right)))
+      }
+  }
+}
+
+# TODO error here: the effects on Map and ~> should be recognized as
+# the same implicit effect, but they are not
+
+# upd_map : (a, b, Map(a,b,{ |e})) ~e~> Map(a,b,{ |e})
+sig upd_map : (a, b, Map(a,b)) ~> Map(a,b)
+fun upd_map(key, value, mp) {
+  var (ord=ord, tree=tree) = mp;
+  (mp with tree = Just(upd_tree(ord, key, value, tree)))
+}
+

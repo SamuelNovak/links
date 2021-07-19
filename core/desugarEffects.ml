@@ -30,6 +30,9 @@ The following steps are only performed when effect_sugar is enabled:
 
   2. Treat various anonymous effect variables occuring in the same type
      as being the same variable (this is called the "implicit effect variable")
+     TODO: decide which ones, maybe depending on Policy
+           ;; actually maybe all of them, since they will all be anonymous
+              and hence assumed to be the shared implicit effect variable
 
   3. Typenames whose body contains an anonymous effect variable are
      parameterized over an additional effect variable.
