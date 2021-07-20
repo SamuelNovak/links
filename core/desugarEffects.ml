@@ -33,6 +33,7 @@ The following steps are only performed when effect_sugar is enabled:
      TODO: decide which ones, maybe depending on Policy
            ;; actually maybe all of them, since they will all be anonymous
               and hence assumed to be the shared implicit effect variable
+     TODO: type aliases and arrows should be able to share this implicit variable
 
   3. Typenames whose body contains an anonymous effect variable are
      parameterized over an additional effect variable.
@@ -50,6 +51,8 @@ The following steps are only performed when effect_sugar is enabled:
 let shared_effect_var_name = "$eff"
 
 let has_effect_sugar () = Types.Policy.effect_sugar (Types.Policy.default_policy ())
+let effect_sugar_policy () = Types.Policy.es_policy (Types.Policy.default_policy ())
+module PES = Types.Policy.EffectSugar
 
 let internal_error message =
   Errors.internal_error ~filename:"desugarEffects.ml" ~message
@@ -239,21 +242,72 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
   (* TODO: in the original version, this was true for every tycon with a Row var with restriction effect as the last param *)
   | _ -> false
 
+(* This will traverse to where an implicit shared effect could
+   possibly be expected and if a candidate is there, find out its
+   wildedness. *)
+let is_shared_implicit_wild tycon_env =
+  let o =
+    object (o : 'self_type)
+      inherit SugarTraversals.fold as super
+
+      val wildness : [ `Present| `Absent | `Poly] option = None
+      method wildness = wildness
+
+      method with_wildness : 'a -> 'self_type
+        = fun w -> {< wildness = Some w >}
+
+      method! datatype : 'tp -> 'self_type
+        = fun dt ->
+        let open Sugartypes.Datatype in
+        let tp = SourceCode.WithPos.node dt in
+        match tp with
+        | Function (_,_, c) | Lolli (_,_, c) when may_have_shared_eff tycon_env c ->
+           o#datatype c
+        | Function (_,e,_) | Lolli (_,e,_) ->
+           o#effect_row e
+        | TypeApplication (name, tyargs) ->
+           o#tyapp name tyargs
+        | _ -> super#datatype dt
+
+      method effect_row : Datatype.row -> 'self_type
+        = fun (fields,_) ->
+        match AList.lookup Types.wild fields with
+        | None -> o (* wild not found *)
+        | Some spec ->
+           let open Sugartypes.Datatype in
+           begin match spec with
+           | Present _ -> o#with_wildness `Present
+           | Absent -> o#with_wildness `Absent
+           | Var _ -> o#with_wildness `Poly
+           end
+
+      method tyapp : string -> Datatype.type_arg list -> 'self_type
+        = fun name tyargs ->
+        o
+    end
+  in
+  fun dt -> (o#datatype dt)#wildness
+
 (** Perform some initial desugaring of effect rows, to make them more amenable
    to later analysis.
   - Elaborate operations in effect rows, converting from the various sugared
      forms to the canonical one.
   - Remap anonymous effect variables to the correct version.
     - If effect sugar is disabled, all anonymous effect variables become "$".
-   - If we've an unnamed effect in a non-tail position (i.e. not the far
+    - If we've an unnamed effect in a non-tail position (i.e. not the far
       right of an arrow/typename chain) then remap to "$". For instance,
       `(a) -> (b) -> c` becomes `(a) -$-> (b) -$-> c`.
-   - If we're an anonymous variable in a row, remap to "$". (For instance,
+      TODO: do we actually want this to happen?
+    - If we're an anonymous variable in a row, remap to "$". (For instance,
       ` -_->` becomes `-$eff->`. *)
+
+(* TODO force-unify all same-wildedness effects (waaaait????) *)
 let cleanup_effects tycon_env =
   let has_effect_sugar = has_effect_sugar () in
   (object (self)
      inherit SugarTraversals.map as super
+
+     val is_implicit_wild : bool option = None
 
      method! datatype dt =
        let open Datatype in
@@ -261,8 +315,9 @@ let cleanup_effects tycon_env =
        let { pos; node = t } = dt in
        let do_fun a e r =
          let a = self#list (fun o -> o#datatype) a in
+         (* TODO there needs to be a decision here based on wildedness *)
          let has_shared = may_have_shared_eff tycon_env r in
-         let e = self#effect_row ~allow_shared:(not has_shared) e in
+         let e = self#effect_row ~allow_shared:(not has_shared)(* true *) e in
          let r = self#datatype r in
          (a, e, r)
        in
@@ -310,30 +365,34 @@ let cleanup_effects tycon_env =
        let fields =
          List.map
            (function
-             | ( name,
+            | ( name,
+                Present
+                  { node = Function (domain, (fields, rv), codomain); pos } )
+              as op
+                 when not (TypeUtils.is_builtin_effect name) -> (
+              print_endline ("effect_row -> fields -> function, not builtin: " ^ name);
+                (* Elaborates `Op : a -> b' to `Op : a {}-> b' *)
+                match (rv, fields) with
+                | Closed, [] -> op
+                | Open _, []
+                  | Recursive _, [] ->
+                   (* might need an extra check on recursive rows *)
+                   (* TODO is this correct *)
+                   ( name,
+                     Present
+                       (SourceCode.WithPos.make ~pos
+                          (Function (domain, ([], Closed), codomain))) )
+                | _, _ -> raise (unexpected_effects_on_abstract_op pos name) )
+            | name, Present node when not (TypeUtils.is_builtin_effect name) ->
+               print_endline ("effect_row -> fields -> other, not builtin: " ^ name);
+               (* Elaborates `Op : a' to `Op : () {}-> a' *)
+               ( name,
                  Present
-                   { node = Function (domain, (fields, rv), codomain); pos } )
-               as op
-               when not (TypeUtils.is_builtin_effect name) -> (
-                 (* Elaborates `Op : a -> b' to `Op : a {}-> b' *)
-                 match (rv, fields) with
-                 | Closed, [] -> op
-                 | Open _, []
-                 | Recursive _, [] ->
-                     (* might need an extra check on recursive rows *)
-                    (* TODO is this correct *)
-                     ( name,
-                       Present
-                         (SourceCode.WithPos.make ~pos
-                            (Function (domain, ([], Closed), codomain))) )
-                 | _, _ -> raise (unexpected_effects_on_abstract_op pos name) )
-             | name, Present node when not (TypeUtils.is_builtin_effect name) ->
-                 (* Elaborates `Op : a' to `Op : () {}-> a' *)
-                 ( name,
-                   Present
-                     (SourceCode.WithPos.make ~pos:node.pos
-                        (Function ([], ([], Closed), node))) )
-             | x -> x)
+                   (SourceCode.WithPos.make ~pos:node.pos
+                      (Function ([], ([], Closed), node))) )
+            | (name, x) ->
+               print_endline ("effect_row -> fields -> other, any: " ^ name);
+               (name, x))
            fields
        in
        let gue = SugarTypeVar.get_unresolved_exn in
