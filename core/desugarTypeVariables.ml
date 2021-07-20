@@ -81,7 +81,7 @@ let free_type_variable ?var pos =
     | Some name -> Printf.sprintf "type variable `%s'"  name
   in Errors.Type_error
        (pos,
-        "Unbound " ^ desc ^ " in position where
+        "Unbound " ^ desc ^ " in position where\
         no free type variables are allowed")
 
 let concrete_subkind =
