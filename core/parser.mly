@@ -178,8 +178,12 @@ let named_typevar name freedom : SugarTypeVar.t =
 let fresh_typevar freedom : SugarTypeVar.t =
   named_typevar "$" freedom
 
-let fresh_effects =
-  let stv = SugarTypeVar.mk_unresolved "$eff" None `Rigid in
+let fresh_effects_tame =
+  let stv = SugarTypeVar.mk_unresolved "$eff_tame" None `Rigid in
+  ([], Datatype.Open stv)
+
+let fresh_effects_wild =
+  let stv = SugarTypeVar.mk_unresolved "$eff_wild" None `Rigid in
   ([], Datatype.Open stv)
 
 module MutualBindings = struct
@@ -912,8 +916,8 @@ straight_arrow:
   straight_arrow_prefix RARROW datatype                        { Datatype.Function ($1, $2, $4) }
 | parenthesized_datatypes
   straight_arrow_prefix LOLLI datatype                         { Datatype.Lolli    ($1, $2, $4) }
-| parenthesized_datatypes RARROW datatype                      { Datatype.Function ($1, fresh_effects, $3) }
-| parenthesized_datatypes LOLLI datatype                       { Datatype.Lolli    ($1, fresh_effects, $3) }
+| parenthesized_datatypes RARROW datatype                      { Datatype.Function ($1, fresh_effects_tame, $3) }
+| parenthesized_datatypes LOLLI datatype                       { Datatype.Lolli    ($1, fresh_effects_tame, $3) }
 | parenthesized_datatypes RRARROW datatype                     { Datatype.Function ($1, ([], Datatype.Closed), $3) }
 
 squiggly_arrow:
@@ -921,8 +925,8 @@ squiggly_arrow:
   squig_arrow_prefix SQUIGRARROW datatype                      { Datatype.Function ($1, row_with_wp $2, $4) }
 | parenthesized_datatypes
   squig_arrow_prefix SQUIGLOLLI datatype                       { Datatype.Lolli    ($1, row_with_wp $2, $4) }
-| parenthesized_datatypes SQUIGRARROW datatype                 { Datatype.Function ($1, row_with_wp fresh_effects, $3) }
-| parenthesized_datatypes SQUIGLOLLI datatype                  { Datatype.Lolli    ($1, row_with_wp fresh_effects, $3) }
+| parenthesized_datatypes SQUIGRARROW datatype                 { Datatype.Function ($1, row_with_wp fresh_effects_wild, $3) }
+| parenthesized_datatypes SQUIGLOLLI datatype                  { Datatype.Lolli    ($1, row_with_wp fresh_effects_wild, $3) }
 
 mu_datatype:
 | MU VARIABLE DOT mu_datatype                                  { Datatype.Mu (named_typevar $2 `Rigid, with_pos $loc($4) $4) }

@@ -48,7 +48,14 @@ The following steps are only performed when effect_sugar is enabled:
 
 (* Name used to indicate that a certain (originally anonymous) row variable
    should be replaced by a shared row variabled later on. *)
-let shared_effect_var_name = "$eff"
+let shared_effect_var_name_tame = "$eff_tame"
+let shared_effect_var_name_wild = "$eff_wild"
+let se_vid_tame = -1
+let se_vid_wild = -2
+
+let is_shared_effect_var_name n =
+  n == shared_effect_var_name_tame
+  || n == shared_effect_var_name_wild
 
 let has_effect_sugar () = Types.Policy.effect_sugar (Types.Policy.default_policy ())
 let effect_sugar_policy () = Types.Policy.es_policy (Types.Policy.default_policy ())
@@ -158,22 +165,25 @@ module RowVarMap : ROW_VAR_MAP = struct
   let is_relevant : SugarTypeVar.t -> bool =
     let open SugarTypeVar in
     function
-    | TUnresolved (name, _, _) when name <> shared_effect_var_name -> false
+    | TUnresolved (name, _, _) when not (is_shared_effect_var_name name)-> false
     | _ -> true
 
   (* helpers *)
   let get_var =
     let open SugarTypeVar in
     function
-    | TUnresolved (name, _, _) when name = shared_effect_var_name ->
-        (* magic number specially used for $eff *)
-        -1
+    | TUnresolved (name, _, _) when (name = shared_effect_var_name_tame) ->
+       (* magic number specially used for $eff_tame *)
+       se_vid_tame
+    | TUnresolved (name, _, _) when (name = shared_effect_var_name_wild) ->
+        (* magic number specially used for $eff_tame *)
+       se_vid_wild
     | TUnresolved (_, _, _) ->
         raise
           (internal_error
              ( "must only use SugarTypeVarMap on resoled SugarTypeVars OR the \
                 special unresolved one named "
-             ^ shared_effect_var_name ))
+             ^ shared_effect_var_name_tame ^ " or " ^ shared_effect_var_name_wild ))
     | TResolvedType mtv -> fst (unpack_var_id (Unionfind.find mtv))
     | TResolvedRow mrv -> fst (unpack_var_id (Unionfind.find mrv))
     | TResolvedPresence mpv -> fst (unpack_var_id (Unionfind.find mpv))
@@ -399,19 +409,28 @@ let cleanup_effects tycon_env =
        let var =
          match var with
          | Datatype.Open stv
-           when ((not allow_shared) || not has_effect_sugar)
-                && (not (SugarTypeVar.is_resolved stv))
-                && SugarTypeVar.get_unresolved_name_exn stv
-                   = shared_effect_var_name ->
-             let _, sk, fr = gue stv in
-             let stv' = SugarTypeVar.mk_unresolved "$" sk fr in
-             Datatype.Open stv'
+              when ((not allow_shared) || not has_effect_sugar)
+                   && (not (SugarTypeVar.is_resolved stv))
+                   && is_shared_effect_var_name (SugarTypeVar.get_unresolved_name_exn stv) ->
+            let _, sk, fr = gue stv in
+            (* remap `$eff_(wild|tame)' to `$' *)
+            let stv' = SugarTypeVar.mk_unresolved "$" sk fr in
+            Datatype.Open stv'
          | Datatype.Open stv
-           when has_effect_sugar
-                && (not (SugarTypeVar.is_resolved stv))
-                && gue stv = ("$", None, `Rigid) ->
-             let stv' = SugarTypeVar.mk_unresolved "$eff" None `Rigid in
-             Datatype.Open stv'
+              when has_effect_sugar
+                   && (not (SugarTypeVar.is_resolved stv))
+                   && gue stv = ("$", None, `Rigid) ->
+            (* TODO check wildness *)
+            let has_wild = match AList.lookup Types.wild fields with (* TODO this can be done with the map above *)
+              | Some _ -> true
+              | None -> false
+            in
+            let eff_name = if has_wild
+                           then shared_effect_var_name_wild
+                           else shared_effect_var_name_tame
+            in
+            let stv' = SugarTypeVar.mk_unresolved eff_name None `Rigid in
+            Datatype.Open stv'
          | _ -> var
        in
        self#row (fields, var)
@@ -495,9 +514,15 @@ let gather_mutual_info (tycon_env : simple_tycon_env) =
            match eff_var with
            | Datatype.Open stv
              when (not (SugarTypeVar.is_resolved stv))
-                  && SugarTypeVar.get_unresolved_exn stv = ("$eff", None, `Rigid)
+                  (* && SugarTypeVar.get_unresolved_exn stv = ("$eff", None, `Rigid) *)
              ->
-               self#with_implicit
+              (* self#with_implicit  *)
+              let stv = SugarTypeVar.get_unresolved_exn stv in
+              begin
+                match stv with
+                | name, None, `Rigid when is_shared_effect_var_name name -> self#with_implicit
+                | _ -> self
+              end
            | _ -> self )
        | TypeApplication (name, ts) -> (
            let tycon_info = SEnv.find_opt name tycon_env in
@@ -815,8 +840,11 @@ class main_traversal simple_tycon_env =
 
                     (* Looking for this gives us the operations associcated with
                        the $eff var. The kind and freedom info are ignored for the lookup *)
+                   (* TODO instead of finding the universal shared
+                      effect, find out if we need a tame or wild one
+                      and use that *)
                     let eff_sugar_var =
-                      SugarTypeVar.mk_unresolved shared_effect_var_name None
+                      SugarTypeVar.mk_unresolved shared_effect_var_name_wild (* TODO VERY TEMPORARY *) None
                         `Rigid
                     in
 
@@ -865,8 +893,7 @@ class main_traversal simple_tycon_env =
         | D.Closed -> (o, rv)
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
-               && SugarTypeVar.get_unresolved_name_exn stv
-                  = shared_effect_var_name -> (
+               && is_shared_effect_var_name (SugarTypeVar.get_unresolved_name_exn stv) -> (
             match shared_effect with
             | None -> raise (shared_effect_forbidden_here dpos)
             | Some s ->
@@ -874,6 +901,7 @@ class main_traversal simple_tycon_env =
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
                && DesugarTypeVariables.is_anonymous stv ->
+           print_endline "HERE (EXPECT ERROR)";
             if not allow_implictly_bound_vars then
               raise (DesugarTypeVariables.free_type_variable dpos);
 
