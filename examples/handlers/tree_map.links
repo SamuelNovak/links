@@ -64,7 +64,7 @@ fun upd_tree(ord, key, value, tree) {
 # TODO error here: the effects on Map and ~> should be recognized as
 # the same implicit effect, but they are not
 
-# upd_map : (a, b, Map(a,b,{ |e})) ~e~> Map(a,b,{ |e})
+# sig upd_map : (a, b, Map(a,b,{ |e})) ~e~> Map(a,b,{ |e})
 sig upd_map : (a, b, Map(a,b)) ~> Map(a,b)
 fun upd_map(key, value, mp) {
   var (ord=ord, tree=tree) = mp;

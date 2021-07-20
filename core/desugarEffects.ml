@@ -255,12 +255,14 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
 (* This will traverse to where an implicit shared effect could
    possibly be expected and if a candidate is there, find out its
    wildedness. *)
+(* TODO don't actually need this, sharing will work for all compatible
+   variables (for fresh arrows based on wildness) *)
 let is_shared_implicit_wild tycon_env =
   let o =
     object (o : 'self_type)
       inherit SugarTraversals.fold as super
 
-      val wildness : [ `Present| `Absent | `Poly] option = None
+      val wildness : [ `Present| `Absent | `Poly ] option = None
       method wildness = wildness
 
       method with_wildness : 'a -> 'self_type
@@ -297,6 +299,8 @@ let is_shared_implicit_wild tycon_env =
     end
   in
   fun dt -> (o#datatype dt)#wildness
+
+
 
 (** Perform some initial desugaring of effect rows, to make them more amenable
    to later analysis.
@@ -351,10 +355,10 @@ let cleanup_effects tycon_env =
                function
                | _, [] -> []
                | [], Row t :: ts ->
-                   Row (self#effect_row ~allow_shared:false t) :: go ([], ts)
+                   Row (self#effect_row ~allow_shared:false (* ??? *) t) :: go ([], ts)
                | (PrimaryKind.Row, (_, Restriction.Effect)) :: qs, Row t :: ts
                  ->
-                   Row (self#effect_row ~allow_shared:false t) :: go (qs, ts)
+                   Row (self#effect_row ~allow_shared:false (* ??? *) t) :: go (qs, ts)
                | (([] as qs) | _ :: qs), t :: ts ->
                    self#type_arg t :: go (qs, ts)
              in
@@ -420,7 +424,7 @@ let cleanup_effects tycon_env =
               when has_effect_sugar
                    && (not (SugarTypeVar.is_resolved stv))
                    && gue stv = ("$", None, `Rigid) ->
-            (* TODO check wildness *)
+            (* check wildness: presence doesn't matter, only the existence of label *)
             let has_wild = match AList.lookup Types.wild fields with (* TODO this can be done with the map above *)
               | Some _ -> true
               | None -> false
