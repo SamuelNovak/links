@@ -142,6 +142,7 @@ module type ROW_VAR_MAP = sig
   val add : key -> 'a -> 'a t -> 'a t
   val find_opt : key -> 'a t -> 'a option
   val map : ('a -> 'b) -> 'a t -> 'b t
+  val iter : (int -> 'a -> unit) -> 'a t -> unit
 
   (* val remove : key -> 'a t -> 'a t *)
 
@@ -211,6 +212,8 @@ module RowVarMap : ROW_VAR_MAP = struct
   let empty = IntMap.empty
 
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
+
+  let iter = IntMap.iter
 
   (* let remove : key -> 'a t -> 'a t = fun k m ->
    *   let var = get_var k in
@@ -579,20 +582,18 @@ let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
     =
   let dt = cleanup_effects tycon_env dt in
   let row_operations = gather_operations tycon_env allow_fresh dt in
-  let ftr = to_ftree dt in
-  print_endline @@ show_ftree ftr;
-  let _ = RowVarMap.map (fun v -> print_endline "HERE";
-                                  StringMap.iter (
-                                      fun n c -> let c = Lazy.force c in
-                                                 (* let c = match Unionfind.find c with
-                                                  *   | Types.Var (c,_,_) -> c
-                                                  *   | _ -> failwith "[**]"
-                                                  * in *)
-                                                 let c = Types.Meta c in
-                                                 let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
-                                                 let c = Types.string_of_datatype ~policy:pol c in
-                                                 print_endline (n ^ " :=> " ^ c)
-                                    ) v) row_operations in
+  let _ = RowVarMap.iter (fun id v -> print_endline ("RowVar " ^ string_of_int id);
+                                      StringMap.iter (
+                                          fun n c -> let c = Lazy.force c in
+                                                     (* let c = match Unionfind.find c with
+                                                      *   | Types.Var (c,_,_) -> c
+                                                      *   | _ -> failwith "[**]"
+                                                      * in *)
+                                                     let c = Types.Meta c in
+                                                     let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=true } in
+                                                     let c = Types.string_of_datatype ~policy:pol c in
+                                                     print_endline (n ^ " :=> " ^ c)
+                                        ) v) row_operations in
   let shared_effect =
     match shared_effect with
     | None when allow_fresh && has_effect_sugar () ->
