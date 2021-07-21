@@ -245,61 +245,14 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
   | Lolli _ ->
       true
   | TypeApplication (tycon, _) -> (
-      let param_kinds, _has_implicit_effect = SEnv.find tycon tycon_env in
+    let param_kinds, _has_implicit_effect = SEnv.find tycon tycon_env in
+    (* TODO sugar will apply to any effect rows, not just the last one
+       (though the last one is the row that can be omitted) *)
       match ListUtils.last_opt param_kinds with
       | Some (PrimaryKind.Row, (_, Restriction.Effect)) -> true
       | _ -> false )
   (* TODO: in the original version, this was true for every tycon with a Row var with restriction effect as the last param *)
   | _ -> false
-
-(* This will traverse to where an implicit shared effect could
-   possibly be expected and if a candidate is there, find out its
-   wildedness. *)
-(* TODO don't actually need this, sharing will work for all compatible
-   variables (for fresh arrows based on wildness) *)
-let is_shared_implicit_wild tycon_env =
-  let o =
-    object (o : 'self_type)
-      inherit SugarTraversals.fold as super
-
-      val wildness : [ `Present| `Absent | `Poly ] option = None
-      method wildness = wildness
-
-      method with_wildness : 'a -> 'self_type
-        = fun w -> {< wildness = Some w >}
-
-      method! datatype : 'tp -> 'self_type
-        = fun dt ->
-        let open Sugartypes.Datatype in
-        let tp = SourceCode.WithPos.node dt in
-        match tp with
-        | Function (_,_, c) | Lolli (_,_, c) when may_have_shared_eff tycon_env c ->
-           o#datatype c
-        | Function (_,e,_) | Lolli (_,e,_) ->
-           o#effect_row e
-        | TypeApplication (name, tyargs) ->
-           o#tyapp name tyargs
-        | _ -> super#datatype dt
-
-      method effect_row : Datatype.row -> 'self_type
-        = fun (fields,_) ->
-        match AList.lookup Types.wild fields with
-        | None -> o (* wild not found *)
-        | Some spec ->
-           let open Sugartypes.Datatype in
-           begin match spec with
-           | Present _ -> o#with_wildness `Present
-           | Absent -> o#with_wildness `Absent
-           | Var _ -> o#with_wildness `Poly
-           end
-
-      method tyapp : string -> Datatype.type_arg list -> 'self_type
-        = fun name tyargs ->
-        o
-    end
-  in
-  fun dt -> (o#datatype dt)#wildness
-
 
 
 (** Perform some initial desugaring of effect rows, to make them more amenable
