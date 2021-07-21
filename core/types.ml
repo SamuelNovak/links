@@ -3909,9 +3909,17 @@ module Wellformed = struct
                | `ForAll | `Function | `Input | `Lens | `Lolli | `Meta | `Not_typed | `Output
                | `Present | `Primitive | `Record | `Recursive | `RecursiveApplication | `Row
                | `Select | `Table | `Var | `Variant ]
-    and t = s * any
-    and d = [ `Point of any | `Map of (any * any) list | `Tup of any list | `List of any list | `Record of (string * any) list ]
-    and any = T of t | D of d | X | F
+               [@@deriving show]
+    and t = s * any [@@deriving show]
+    and d = [ `Point of any | `Map of (any * any) list
+              | `Tup of any list | `List of any list
+              | `Record of (string * any) list ]
+              [@@deriving show]
+    and any = T of t
+            | D of d
+            | X | F
+            | M of any list
+                     [@@deriving show]
 
     let tup : any list -> any
       = fun lst -> D (`Tup lst)
@@ -3923,7 +3931,7 @@ module Wellformed = struct
       = fun x ->
       match x with
         | Not_typed                        -> `Not_typed, F
-        | Var _                            -> `Var, tup [ X ; X ; X ] (* TODO unless we need rules for the values in Var *)
+        | Var _                            -> `Var, X (* TODO unless we need rules for the values in Var *)
         | Recursive (_,_,t)                -> `Recursive, tup [ X ; X ; styp t ]
         | Alias ((_,_,tas,_),t)            -> `Alias, tup [ tup [ X ; X ; of_tyarg_list tas ; X ] ; styp t ]
         | Application (_,tas)              -> `Application, tup [ X ; of_tyarg_list tas ]
@@ -3956,14 +3964,77 @@ module Wellformed = struct
 
     and of_tyarg_list : type_arg list -> any
       = fun tas -> D (`List (List.map of_tyarg tas))
+
+    module Kind = struct
+      let unspecified : s list
+        = [ `Not_typed ; `Var ; `Recursive ; `Alias ; `Application
+            ; `RecursiveApplication ; `Meta ]
+
+      let typ : s list
+        = [ `Primitive ; `Function ; `Lolli ; `Record ; `Variant ; `Table ; `Lens ; `ForAll ]
+
+      (* TODO `Effect? *)
+
+      let row : s list
+        = [ `Row ; `Closed ]
+
+      let presence : s list
+        = [ `Present ; `Absent ; `Var ]
+
+      let session : s list
+        = [ `Input ; `Output ; `Select ; `Choice ; `Dual ; `End ]
+    end
   end
 
   module Rule = struct
     module S = SymbolTypes
-    (* type t = Rule of *)
+    type t = S.s * S.any [@@deriving show]
+
+    let of_type : S.s -> S.any
+      = fun symbol -> S.T (symbol, S.X)
+
+    let (=:+) : S.s -> S.any -> t
+      = fun symbol contents ->
+      (symbol, contents)
+
+    let (=:>) : S.s -> S.s -> t
+      = fun symbol contents ->
+      (symbol, of_type contents)
+
+    let (|||) : S.any -> S.any -> S.any
+      = fun l ->
+      function
+      | S.M rs -> S.M (l :: rs)
+      | r      -> S.M [ l ; r ]
+
+    let (|:|) : S.s -> S.s -> S.any
+      = fun l r -> (of_type l) ||| (of_type r)
+
+    let (|>|) : S.s -> S.any -> S.any
+      = fun l r -> (of_type l) ||| r
+
+    let m_of_list : S.s list -> S.any
+      = fun lst -> S.M (List.map of_type lst)
+
+    let (+:+) : S.s list -> S.any -> t list
+      = fun symbols contents ->
+      List.map (fun s -> s =:+ contents) symbols
+
   end
 
-  class checker = object (o : 'self_type)
-    inherit Transform.visitor as super
-  end
+  let ruleset : Rule.t list =
+    let open SymbolTypes in
+    let open Rule in
+
+    let func = ([ `Function ; `Lolli ]
+                +:+ tup [ m_of_list Kind.typ
+                        ; m_of_list Kind.row
+                        ; m_of_list Kind.typ ]) in
+    let row_based = ([ `Record ; `Variant ; `Effect ; `Select ; `Choice ]
+                     +:+ m_of_list Kind.row) in
+    let meta_presence = `Meta
+                        =:+ m_of_list [ `Present ; `Absent ; `Var ] in
+    (* TODO other rules *)
+    meta_presence :: (func @ row_based)
+
 end
