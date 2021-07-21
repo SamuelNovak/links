@@ -3909,57 +3909,58 @@ module Wellformed = struct
                | `ForAll | `Function | `Input | `Lens | `Lolli | `Meta | `Not_typed | `Output
                | `Present | `Primitive | `Record | `Recursive | `RecursiveApplication | `Row
                | `Select | `Table | `Var | `Variant ]
-    and t = s * typ
-    and d = [ `Point of t | `Map of any * any | `Tup of any list ]
-    and any = T of t | D of d | F
-
-    let of_typ : typ -> t
-      = fun x ->
-      let s = match x with
-        | Not_typed              -> `Not_typed
-        | Var _                  -> `Var
-        | Recursive _            -> `Recursive
-        | Alias _                -> `Alias
-        | Application _          -> `Application
-        | RecursiveApplication _ -> `RecursiveApplication
-        | Meta _                 -> `Meta
-        | Primitive _            -> `Primitive
-        | Function _             -> `Function
-        | Lolli _                -> `Lolli
-        | Record _               -> `Record
-        | Variant _              -> `Variant
-        | Table _                -> `Table
-        | Lens _                 -> `Lens
-        | ForAll _               -> `ForAll
-        | Effect _               -> `Effect
-        | Row _                  -> `Row
-        | Closed                 -> `Closed
-        | Absent                 -> `Absent
-        | Present _              -> `Present
-        | Input _                -> `Input
-        | Output _               -> `Output
-        | Select _               -> `Select
-        | Choice _               -> `Choice
-        | Dual _                 -> `Dual
-        | End                    -> `End
-      in
-      (s, x)
+    and t = s * any
+    and d = [ `Point of any | `Map of (any * any) list | `Tup of any list | `List of any list | `Record of (string * any) list ]
+    and any = T of t | D of d | X | F
 
     let tup : any list -> any
       = fun lst -> D (`Tup lst)
 
-    let extract_nonterminal_typ : typ -> any
-      = function
-      | Recursive (_,_,tp) -> tup [F; F; T (of_typ tp)]
-      | Alias ((_,_,tyargs,_),tp) -> 
+    let rec styp : typ -> any
+      = fun t -> T (of_typ t)
+
+    and of_typ : typ -> t
+      = fun x ->
+      match x with
+        | Not_typed                        -> `Not_typed, F
+        | Var _                            -> `Var, tup [ X ; X ; X ] (* TODO unless we need rules for the values in Var *)
+        | Recursive (_,_,t)                -> `Recursive, tup [ X ; X ; styp t ]
+        | Alias ((_,_,tas,_),t)            -> `Alias, tup [ tup [ X ; X ; of_tyarg_list tas ; X ] ; styp t ]
+        | Application (_,tas)              -> `Application, tup [ X ; of_tyarg_list tas ]
+        | RecursiveApplication {r_args; _} -> `RecursiveApplication, D (`Record [ "r_args", of_tyarg_list r_args ])
+        | Meta p                           -> `Meta, D (`Point (styp (Unionfind.find p)))
+        | Primitive _                      -> `Primitive, X
+        | Function (d,e,c)                 -> `Function, tup [ styp d ; styp e ; styp c ]
+        | Lolli (d,e,c)                    -> `Lolli, tup [ styp d ; styp e ; styp c ]
+        | Record r                         -> `Record, styp r
+        | Variant r                        -> `Variant, styp r
+        | Table (a,b,c)                    -> `Table, tup [ styp a ; styp b ; styp c ]
+        | Lens _                           -> `Lens, X (* TODO? *)
+        | ForAll (_,t)                     -> `ForAll, tup [ X ; styp t]
+        | Effect r                         -> `Effect, styp r
+        | Row (f,v,_)                      -> `Row, tup [ D (`Map (FieldEnv.fold (fun _ f acc -> (X, styp f) :: acc) f []))
+                                                        ; D (`Point (styp (Unionfind.find v))) ]
+        | Closed                           -> `Closed, F
+        | Absent                           -> `Absent, F
+        | Present t                        -> `Present, styp t
+        | Input (p,q)                      -> `Input, tup [ styp p ; styp q ]
+        | Output (p,q)                     -> `Output, tup [ styp p ; styp q ]
+        | Select t                         -> `Select, styp t
+        | Choice t                         -> `Choice, styp t
+        | Dual t                           -> `Dual, styp t
+        | End                              -> `End, F
+
+    and of_tyarg : type_arg -> any
+      = fun (_,t) ->
+      tup [ X ; styp t ]
+
+    and of_tyarg_list : type_arg list -> any
+      = fun tas -> D (`List (List.map of_tyarg tas))
   end
 
   module Rule = struct
-    let module S = SymbolTypes
-    type t = Nullary of S.t
-           | Unary of S.t * S.t
-           | Tup of S.t * (S.t list)
-           | Rec of S.t *
+    module S = SymbolTypes
+    (* type t = Rule of *)
   end
 
   class checker = object (o : 'self_type)
