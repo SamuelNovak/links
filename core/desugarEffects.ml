@@ -133,30 +133,30 @@ let make_anon_point k sk freedom =
 (** A map with SugarTypeVar as keys, use for associating the former
    with information about what
 *)
-module type ROW_VAR_MAP = sig
-  type key = SugarTypeVar.t
-  type 'a t
+(* module type ROW_VAR_MAP = sig
+ *   type key = SugarTypeVar.t
+ *   type 'a t
+ * 
+ *   val empty : 'a t
+ * 
+ *   val add : key -> 'a -> 'a t -> 'a t
+ *   val find_opt : key -> 'a t -> 'a option
+ *   val map : ('a -> 'b) -> 'a t -> 'b t
+ * 
+ *   (\* val remove : key -> 'a t -> 'a t *\)
+ * 
+ *   (\* Predicate telling you if a given sugar variable should/can be
+ *      handled by this map *\)
+ *   val is_relevant : SugarTypeVar.t -> bool
+ * 
+ *   (\* like remove, but remove an entry by using the int id in the quantifier *\)
+ *   val remove_by_quantifier : SugarQuantifier.t -> 'a t -> 'a t
+ *   val update_by_quantifier :
+ *     SugarQuantifier.t -> ('a option -> 'a option) -> 'a t -> 'a t
+ *   val find_opt_by_quantifier : SugarQuantifier.t -> 'a t -> 'a option
+ * end *)
 
-  val empty : 'a t
-
-  val add : key -> 'a -> 'a t -> 'a t
-  val find_opt : key -> 'a t -> 'a option
-  val map : ('a -> 'b) -> 'a t -> 'b t
-
-  (* val remove : key -> 'a t -> 'a t *)
-
-  (* Predicate telling you if a given sugar variable should/can be
-     handled by this map *)
-  val is_relevant : SugarTypeVar.t -> bool
-
-  (* like remove, but remove an entry by using the int id in the quantifier *)
-  val remove_by_quantifier : SugarQuantifier.t -> 'a t -> 'a t
-  val update_by_quantifier :
-    SugarQuantifier.t -> ('a option -> 'a option) -> 'a t -> 'a t
-  val find_opt_by_quantifier : SugarQuantifier.t -> 'a t -> 'a option
-end
-
-module RowVarMap : ROW_VAR_MAP = struct
+module RowVarMap (* : ROW_VAR_MAP *) = struct
   type key = SugarTypeVar.t
 
   (* internal representation, hidden *)
@@ -211,6 +211,8 @@ module RowVarMap : ROW_VAR_MAP = struct
   let empty = IntMap.empty
 
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
+
+  let iter = IntMap.iter
 
   (* let remove : key -> 'a t -> 'a t = fun k m ->
    *   let var = get_var k in
@@ -281,7 +283,7 @@ let cleanup_effects tycon_env =
          let a = self#list (fun o -> o#datatype) a in
          (* TODO there needs to be a decision here based on wildedness; does it? *)
          let has_shared = may_have_shared_eff tycon_env r in
-         let e = self#effect_row ~allow_shared:(not has_shared)(* true *) e in
+         let e = self#effect_row ~allow_shared:(* (not has_shared) *)true e in
          let r = self#datatype r in
          (a, e, r)
        in
@@ -385,6 +387,7 @@ let cleanup_effects tycon_env =
             in
             (* remap `$' to `$eff_(wild|tame)' *)
             let stv' = SugarTypeVar.mk_unresolved eff_name None `Rigid in
+            print_endline ((SugarTypeVar.show stv) ^ " => " ^ (SugarTypeVar.show stv'));
             Datatype.Open stv'
          | _ -> var
        in
@@ -576,37 +579,40 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
     end
 
 let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
-    =
+  =
+  print_endline "\nBefore cleanup:";
+  print_endline @@ Datatype.show_with_pos dt;
   let dt = cleanup_effects tycon_env dt in
+  print_endline "==========\nAfter cleanup:";
+  print_endline @@ Datatype.show_with_pos dt;
+  print_newline ();
   let row_operations = gather_operations tycon_env allow_fresh dt in
-  let ftr = to_ftree dt in
-  print_endline @@ show_ftree ftr;
-  let _ = RowVarMap.map (fun v -> print_endline "HERE";
-                                  StringMap.iter (
-                                      fun n c -> let c = Lazy.force c in
-                                                 (* let c = match Unionfind.find c with
-                                                  *   | Types.Var (c,_,_) -> c
-                                                  *   | _ -> failwith "[**]"
-                                                  * in *)
-                                                 let c = Types.Meta c in
-                                                 let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
-                                                 let c = Types.string_of_datatype ~policy:pol c in
-                                                 print_endline (n ^ " :=> " ^ c)
-                                    ) v) row_operations in
+  let _ = RowVarMap.iter (fun id v -> print_endline ("Row Var: " ^ string_of_int id);
+                                      StringMap.iter (
+                                          fun n c -> let c = Lazy.force c in
+                                                     (* let c = match Unionfind.find c with
+                                                      *   | Types.Var (c,_,_) -> c
+                                                      *   | _ -> failwith "[**]"
+                                                      * in *)
+                                                     let c = Types.Meta c in
+                                                     let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
+                                                     let c = Types.string_of_datatype ~policy:pol c in
+                                                     print_endline (n ^ " :=> " ^ c)
+                                        ) v) row_operations in
   let shared_effect =
     match shared_effect with
     | None when allow_fresh && has_effect_sugar () ->
-        let point =
-          lazy
-            (let var = Types.fresh_raw_variable () in
-             Unionfind.fresh
-               (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_any)), `Rigid)))
-        in
-        Some point
+       let point =
+         lazy
+           (let var = Types.fresh_raw_variable () in
+            Unionfind.fresh
+              (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_any)), `Rigid)))
+       in
+       Some point
     | _ ->
-        (* If the shared_effect variable was already created, for instance
+       (* If the shared_effect variable was already created, for instance
            by the typename logic, we don't have to create one *)
-        shared_effect
+       shared_effect
   in
   (dt, row_operations, shared_effect)
 
@@ -623,6 +629,7 @@ class main_traversal simple_tycon_env =
 
     (** The active shared effect variable, if allowed to be used. *)
     val shared_effect : Types.meta_row_var Lazy.t option = None
+    val shared_effects : Types.meta_row_var Lazy.t StringMap.t = StringMap.empty
 
     (** Allow implicitly bound type/row/presence variables in the current context?
        This does not effect the special, implictly bound effect variable
@@ -645,8 +652,11 @@ class main_traversal simple_tycon_env =
       {<allow_implictly_bound_vars>}
 
     method set_shared_effect shared_effect = {<shared_effect>}
+    method set_shared_effects shared_effects = {< shared_effects >}
+    method add_shared_effect name lazy_eff = o#set_shared_effects (StringMap.add name lazy_eff shared_effects)
 
     method disallow_shared_effect = {<shared_effect = None>}
+    method disallow_shared_effects = {< shared_effects = StringMap.empty >}
 
     method! phrasenode =
       let open Sugartypes in
@@ -747,7 +757,7 @@ class main_traversal simple_tycon_env =
               in
 
               (* now insert implict effect as argument if necessary*)
-              let ts =
+              let ts =                            (* TODO *)
                 match (may_procide_shared_effect, shared_effect, qn - tn) with
                 | _, _, 0 ->
                     (* already fully applied, do nothing *)
@@ -817,15 +827,19 @@ class main_traversal simple_tycon_env =
         | D.Closed -> (o, rv)
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
-               && is_shared_effect_var_name (SugarTypeVar.get_unresolved_name_exn stv) -> (
-            match shared_effect with
+               && is_shared_effect_var_name (let name = SugarTypeVar.get_unresolved_name_exn stv in
+                                             print_endline ("A " ^ name);
+                                             name) -> (
+            match StringMap.find_opt (SugarTypeVar.get_unresolved_name_exn stv) shared_effects with
             | None -> raise (shared_effect_forbidden_here dpos)
             | Some s ->
+               (* (•1) TODO here I am accidentally unifying all shared variables *)
                 (o, D.Open (Lazy.force s |> SugarTypeVar.mk_resolved_row)) )
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
                && DesugarTypeVariables.is_anonymous stv ->
            print_endline "HERE (EXPECT ERROR)";
+           print_endline @@ SugarTypeVar.show stv;
             if not allow_implictly_bound_vars then
               raise (DesugarTypeVariables.free_type_variable dpos);
 
