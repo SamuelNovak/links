@@ -212,7 +212,11 @@ module RowVarMap (* : ROW_VAR_MAP *) = struct
 
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
 
+  (* TODO clean this up *)
   let iter = IntMap.iter
+  let fold = IntMap.fold
+  let lookup = IntMap.lookup
+  let add' = IntMap.add
 
   (* let remove : key -> 'a t -> 'a t = fun k m ->
    *   let var = get_var k in
@@ -578,7 +582,7 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
       RowVarMap.empty
     end
 
-let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
+let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effects
   =
   print_endline "\nBefore cleanup:";
   print_endline @@ Datatype.show_with_pos dt;
@@ -599,22 +603,23 @@ let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
                                                      let c = Types.string_of_datatype ~policy:pol c in
                                                      print_endline (n ^ " :=> " ^ c)
                                         ) v) row_operations in
-  let shared_effect =
-    match shared_effect with
-    | None when allow_fresh && has_effect_sugar () ->
-       let point =
-         lazy
-           (let var = Types.fresh_raw_variable () in
-            Unionfind.fresh
-              (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_any)), `Rigid)))
-       in
-       Some point
-    | _ ->
-       (* If the shared_effect variable was already created, for instance
-           by the typename logic, we don't have to create one *)
-       shared_effect
-  in
-  (dt, row_operations, shared_effect)
+  let shared_effects =
+    RowVarMap.fold
+      (fun vid _ acc ->
+        match RowVarMap.lookup vid acc with
+        | None when allow_fresh && has_effect_sugar() ->
+           (* need to create a fresh variable that will resolve this sugar variable *)
+           let point = lazy begin
+                           let var = Types.fresh_raw_variable () in
+                           (* TODO original code did res any but this should be an effect right? *)
+                           Unionfind.fresh (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_effect)), `Rigid))
+                         end in
+           RowVarMap.add' vid point acc
+        | _ ->
+           (* a type var already exists, no need to make a new one *)
+           acc)
+      row_operations shared_effects in
+  (dt, row_operations, shared_effects)
 
 class main_traversal simple_tycon_env =
   object (o : 'self_type)
@@ -629,7 +634,7 @@ class main_traversal simple_tycon_env =
 
     (** The active shared effect variable, if allowed to be used. *)
     val shared_effect : Types.meta_row_var Lazy.t option = None
-    val shared_effects : Types.meta_row_var Lazy.t StringMap.t = StringMap.empty
+    val shared_effects : Types.meta_row_var Lazy.t RowVarMap.t = RowVarMap.empty
 
     (** Allow implicitly bound type/row/presence variables in the current context?
        This does not effect the special, implictly bound effect variable
@@ -653,10 +658,10 @@ class main_traversal simple_tycon_env =
 
     method set_shared_effect shared_effect = {<shared_effect>}
     method set_shared_effects shared_effects = {< shared_effects >}
-    method add_shared_effect name lazy_eff = o#set_shared_effects (StringMap.add name lazy_eff shared_effects)
+    method add_shared_effect var lazy_eff = o#set_shared_effects (RowVarMap.add var lazy_eff shared_effects)
 
     method disallow_shared_effect = {<shared_effect = None>}
-    method disallow_shared_effects = {< shared_effects = StringMap.empty >}
+    method disallow_shared_effects = {< shared_effects = RowVarMap.empty >}
 
     method! phrasenode =
       let open Sugartypes in
@@ -830,7 +835,7 @@ class main_traversal simple_tycon_env =
                && is_shared_effect_var_name (let name = SugarTypeVar.get_unresolved_name_exn stv in
                                              print_endline ("A " ^ name);
                                              name) -> (
-            match StringMap.find_opt (SugarTypeVar.get_unresolved_name_exn stv) shared_effects with
+            match RowVarMap.find_opt stv shared_effects with
             | None -> raise (shared_effect_forbidden_here dpos)
             | Some s ->
                (* (•1) TODO here I am accidentally unifying all shared variables *)
@@ -1027,11 +1032,11 @@ class main_traversal simple_tycon_env =
       let pos = SourceCode.WithPos.pos dt in
       let dt, o =
         if not inside_type then
-          let dt, row_operations, shared_effect =
+          let dt, row_operations, shared_effects =
             preprocess_type dt tycon_env allow_implictly_bound_vars
-              shared_effect
+              shared_effects
           in
-          (dt, {<row_operations; shared_effect>})
+          (dt, {<row_operations; shared_effects>})
         else (dt, o)
       in
       let o = o#set_inside_type true in
