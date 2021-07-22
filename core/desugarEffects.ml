@@ -209,6 +209,7 @@ module RowVarMap (* : ROW_VAR_MAP *) = struct
     IntMap.add var v m
 
   let empty = IntMap.empty
+  let is_empty = IntMap.is_empty
 
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
 
@@ -633,7 +634,7 @@ class main_traversal simple_tycon_env =
     val inside_type = false
 
     (** The active shared effect variable, if allowed to be used. *)
-    val shared_effect : Types.meta_row_var Lazy.t option = None
+    (* val shared_effect : Types.meta_row_var Lazy.t option = None *)
     val shared_effects : Types.meta_row_var Lazy.t RowVarMap.t = RowVarMap.empty
 
     (** Allow implicitly bound type/row/presence variables in the current context?
@@ -656,11 +657,11 @@ class main_traversal simple_tycon_env =
     method set_allow_implictly_bound_vars allow_implictly_bound_vars =
       {<allow_implictly_bound_vars>}
 
-    method set_shared_effect shared_effect = {<shared_effect>}
+    (* method set_shared_effect shared_effect = {<shared_effect>} *)
     method set_shared_effects shared_effects = {< shared_effects >}
     method add_shared_effect var lazy_eff = o#set_shared_effects (RowVarMap.add var lazy_eff shared_effects)
 
-    method disallow_shared_effect = {<shared_effect = None>}
+    (* method disallow_shared_effect = {<shared_effect = None>} *)
     method disallow_shared_effects = {< shared_effects = RowVarMap.empty >}
 
     method! phrasenode =
@@ -763,18 +764,18 @@ class main_traversal simple_tycon_env =
 
               (* now insert implict effect as argument if necessary*)
               let ts =                            (* TODO *)
-                match (may_procide_shared_effect, shared_effect, qn - tn) with
+                match (may_procide_shared_effect, not (RowVarMap.is_empty shared_effects), qn - tn) with
                 | _, _, 0 ->
                     (* already fully applied, do nothing *)
                     ts
                 | false, _, 1
-                | _, None, 1 ->
+                | _, false, 1 ->
                     (* One argument missing, but we can't provide shared effect *)
                     raise (arity_err ())
                 | _, _, n when n > 1 || n < 0 ->
                     (* either too many args or more than one missing*)
                     raise (arity_err ())
-                | true, Some lazy_eff, 1 ->
+                | true, true, 1 ->
                     (* insert shared effect as final argument *)
 
                     (* Looking for this gives us the operations associcated with
@@ -786,7 +787,11 @@ class main_traversal simple_tycon_env =
                       SugarTypeVar.mk_unresolved shared_effect_var_name_wild (* TODO VERY TEMPORARY *) None
                         `Rigid
                     in
-
+                    let lazy_eff = RowVarMap.find_opt eff_sugar_var shared_effects in
+                    let lazy_eff = match lazy_eff with
+                      | None -> raise (internal_error "AAAAAAAAAAAAAAAAAAA")
+                      | Some x -> x
+                    in
                     let fields =
                       match RowVarMap.find_opt eff_sugar_var row_operations with
                       | None -> []
@@ -817,10 +822,10 @@ class main_traversal simple_tycon_env =
               (o, TypeApplication (tycon, ts)) )
       | Forall (qs, t) ->
           let o = o#set_allow_implictly_bound_vars false in
-          let o = o#disallow_shared_effect in
+          let o = o#disallow_shared_effects in
           let o, t = o#datatype t in
           let o = o#set_allow_implictly_bound_vars allow_implictly_bound_vars in
-          let o = o#set_shared_effect shared_effect in
+          let o = o#set_shared_effects shared_effects in
           (o, Forall (qs, t))
       | t -> super#datatypenode t
 
@@ -1012,9 +1017,12 @@ class main_traversal simple_tycon_env =
                 (internal_error
                    "a type definition should never be a child-node of a type");
             let shared_effect = StringMap.find name shared_eff_vars in
-            let o =
-              {<tycon_env; shared_effect; allow_implictly_bound_vars = false>}
-            in
+            let o = {<tycon_env; allow_implictly_bound_vars = false>} in
+            (* TODO !!!! *)
+            (* let o = match shared_effect with
+             *   | None -> o
+             *   | Some shared_effect -> o#add_shared_effect name shared_effect
+             * in *)
 
             (* TODO: no info to flow back out? *)
             let _o, dt' = o#datatype' dt in
