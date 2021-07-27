@@ -48,14 +48,18 @@ The following steps are only performed when effect_sugar is enabled:
 
 (* Name used to indicate that a certain (originally anonymous) row variable
    should be replaced by a shared row variabled later on. *)
+let shared_effect_var_name_general = "$eff"
 let shared_effect_var_name_tame = "$eff_tame"
 let shared_effect_var_name_wild = "$eff_wild"
-let se_vid_tame = -1
-let se_vid_wild = -2
+let se_vid_general = -1
+let se_vid_tame    = -2
+let se_vid_wild    = -3
 
 let is_shared_effect_var_name n =
-  n == shared_effect_var_name_tame
-  || n == shared_effect_var_name_wild
+  n = shared_effect_var_name_tame
+  || n = shared_effect_var_name_wild
+  || n = shared_effect_var_name_general
+
 
 let has_effect_sugar () = Types.Policy.effect_sugar (Types.Policy.default_policy ())
 let effect_sugar_policy () = Types.Policy.es_policy (Types.Policy.default_policy ())
@@ -133,30 +137,30 @@ let make_anon_point k sk freedom =
 (** A map with SugarTypeVar as keys, use for associating the former
    with information about what
 *)
-module type ROW_VAR_MAP = sig
-  type key = SugarTypeVar.t
-  type 'a t
+(* module type ROW_VAR_MAP = sig
+ *   type key = SugarTypeVar.t
+ *   type 'a t
+ *
+ *   val empty : 'a t
+ *
+ *   val add : key -> 'a -> 'a t -> 'a t
+ *   val find_opt : key -> 'a t -> 'a option
+ *   val map : ('a -> 'b) -> 'a t -> 'b t
+ *
+ *   (\* val remove : key -> 'a t -> 'a t *\)
+ *
+ *   (\* Predicate telling you if a given sugar variable should/can be
+ *      handled by this map *\)
+ *   val is_relevant : SugarTypeVar.t -> bool
+ *
+ *   (\* like remove, but remove an entry by using the int id in the quantifier *\)
+ *   val remove_by_quantifier : SugarQuantifier.t -> 'a t -> 'a t
+ *   val update_by_quantifier :
+ *     SugarQuantifier.t -> ('a option -> 'a option) -> 'a t -> 'a t
+ *   val find_opt_by_quantifier : SugarQuantifier.t -> 'a t -> 'a option
+ * end *)
 
-  val empty : 'a t
-
-  val add : key -> 'a -> 'a t -> 'a t
-  val find_opt : key -> 'a t -> 'a option
-  val map : ('a -> 'b) -> 'a t -> 'b t
-
-  (* val remove : key -> 'a t -> 'a t *)
-
-  (* Predicate telling you if a given sugar variable should/can be
-     handled by this map *)
-  val is_relevant : SugarTypeVar.t -> bool
-
-  (* like remove, but remove an entry by using the int id in the quantifier *)
-  val remove_by_quantifier : SugarQuantifier.t -> 'a t -> 'a t
-  val update_by_quantifier :
-    SugarQuantifier.t -> ('a option -> 'a option) -> 'a t -> 'a t
-  val find_opt_by_quantifier : SugarQuantifier.t -> 'a t -> 'a option
-end
-
-module RowVarMap : ROW_VAR_MAP = struct
+module RowVarMap (* : ROW_VAR_MAP *) = struct
   type key = SugarTypeVar.t
 
   (* internal representation, hidden *)
@@ -172,11 +176,14 @@ module RowVarMap : ROW_VAR_MAP = struct
   let get_var =
     let open SugarTypeVar in
     function
+    | TUnresolved (name, _, _) when (name = shared_effect_var_name_general) ->
+       (* magic number specially used for $eff_general *)
+       se_vid_general
     | TUnresolved (name, _, _) when (name = shared_effect_var_name_tame) ->
        (* magic number specially used for $eff_tame *)
        se_vid_tame
     | TUnresolved (name, _, _) when (name = shared_effect_var_name_wild) ->
-        (* magic number specially used for $eff_tame *)
+       (* magic number specially used for $eff_tame *)
        se_vid_wild
     | TUnresolved (_, _, _) ->
         raise
@@ -211,6 +218,7 @@ module RowVarMap : ROW_VAR_MAP = struct
   let empty = IntMap.empty
 
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
+  let iter = IntMap.iter
 
   (* let remove : key -> 'a t -> 'a t = fun k m ->
    *   let var = get_var k in
@@ -284,7 +292,7 @@ let cleanup_effects tycon_env =
          let a = self#list (fun o -> o#datatype) a in
          (* TODO there needs to be a decision here based on wildedness *)
          let has_shared = may_have_shared_eff tycon_env r in
-         let e = self#effect_row ~allow_shared:(not has_shared)(* true *) e in
+         let e = self#effect_row ~allow_shared:(* (not has_shared) *)true e in
          let r = self#datatype r in
          (a, e, r)
        in
@@ -388,54 +396,20 @@ let cleanup_effects tycon_env =
             in
             let stv' = SugarTypeVar.mk_unresolved eff_name None `Rigid in
             Datatype.Open stv'
-         | _ -> var
+         (* | Datatype.Open stv
+          *      when has_effect_sugar
+          *           && (not (SugarTypeVar.is_resolved stv))
+          *           && is_shared_effect_var_name (SugarTypeVar.get_unresolved_name_exn stv) ->
+          *    (\* TODO temporary: all $eff_(tame|wild) => $eff *\)
+          *    let stv' = SugarTypeVar.mk_unresolved shared_effect_var_name_general None `Rigid in
+          *    Datatype.Open stv' *)
+         | _ -> print_endline @@ Datatype.show_row_var var;
+                var
        in
        self#row (fields, var)
   end)
     #datatype
 
-(* experiment: translate to ftree *)
-type ftree = FTType of ftree
-           | FTArrow of ftree list * Datatype.row * ftree
-           | FTClosed
-           [@@deriving show]
-
-let to_ftree (dt : Datatype.with_pos) : ftree
-  = let o =
-      object (o : 'self_type)
-        inherit SugarTraversals.fold as super
-
-        val tree : ftree = FTClosed
-        method ftr = tree
-        method with_tree tree = {< tree >}
-
-        method! datatype dt =
-          let open Datatype in
-          let open SourceCode.WithPos in
-          let do_fun a e r =
-            let a = List.map (fun x ->
-                        let o = o#with_tree FTClosed in
-                        let o = o#datatype x in
-                        o#ftr
-                      ) a in
-            let e = e in
-            let r = let o = o#with_tree FTClosed in
-                    let o = o#datatype r in
-                    o#ftr
-            in
-            (a, e, r)
-          in
-          let { node ; _ } = dt in
-          match node with
-          | Function (a, e, r)
-            | Lolli (a, e, r) ->
-             let a, e, r = do_fun a e r in
-             o#with_tree (FTArrow (a, e, r))
-          | dt -> o#with_tree ((super#datatypenode dt)#ftr)
-      end
-    in
-    let o = o#datatype dt in
-    o#ftr
 
 (** Gathers some information about type names, used for later analysis.
     Precondition: cleanup_effects ran on this type. *)
@@ -609,39 +583,52 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
   else RowVarMap.empty
 
 let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
-    =
+  =
+  print_endline "\nBefore cleanup:";
+  print_endline @@ Datatype.show_with_pos dt;
+  print_endline "==============================";
   let dt = cleanup_effects tycon_env dt in
+  print_endline "==============================\nAfter cleanup:";
+  print_endline @@ Datatype.show_with_pos dt;
+  print_endline "==============================\n Operations collected:";
   let row_operations = gather_operations tycon_env allow_fresh dt in
-  let ftr = to_ftree dt in
-  print_endline @@ show_ftree ftr;
-  let _ = RowVarMap.map (fun v -> print_endline "HERE";
-                                  StringMap.iter (
-                                      fun n c -> let c = Lazy.force c in
-                                                 (* let c = match Unionfind.find c with
-                                                  *   | Types.Var (c,_,_) -> c
-                                                  *   | _ -> failwith "[**]"
-                                                  * in *)
-                                                 let c = Types.Meta c in
-                                                 let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
-                                                 let c = Types.string_of_datatype ~policy:pol c in
-                                                 print_endline (n ^ " :=> " ^ c)
-                                    ) v) row_operations in
+  RowVarMap.iter (fun id v -> print_endline ("Row Var:" ^ string_of_int id);
+                              StringMap.iter (
+                                  fun n c -> let c = Lazy.force c in
+                                             let c = Types.Meta c in
+                                             let pol = fun () -> Types.Policy.{ (default_policy ()) with hide_fresh=false } in
+                                             let c = Types.string_of_datatype ~policy:pol c in
+                                             print_endline (n ^ " :=> " ^ c)
+                                ) v) row_operations;
   let shared_effect =
     match shared_effect with
     | None when allow_fresh && has_effect_sugar () ->
-        let point =
-          lazy
-            (let var = Types.fresh_raw_variable () in
-             Unionfind.fresh
-               (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_any)), `Rigid)))
-        in
-        Some point
+       let point =
+         lazy
+           (let var = Types.fresh_raw_variable () in
+            Unionfind.fresh
+              (Types.Var (var, (PrimaryKind.Row, (lin_unl, res_any)), `Rigid)))
+       in
+       Some point
     | _ ->
-        (* If the shared_effect variable was already created, for instance
+       (* If the shared_effect variable was already created, for instance
            by the typename logic, we don't have to create one *)
-        shared_effect
+       shared_effect
   in
   (dt, row_operations, shared_effect)
+
+
+let propagate_operations simple_tycon_env operations =
+  let o =
+    object (o : 'self_type)
+      inherit SugarTraversals.map as super
+
+
+    end
+  in
+  fun (dt : Datatype.with_pos) ->
+  o#datatype dt
+
 
 class main_traversal simple_tycon_env =
   object (o : 'self_type)
@@ -801,7 +788,7 @@ class main_traversal simple_tycon_env =
                       effect, find out if we need a tame or wild one
                       and use that *)
                     let eff_sugar_var =
-                      SugarTypeVar.mk_unresolved shared_effect_var_name_wild (* TODO VERY TEMPORARY *) None
+                      SugarTypeVar.mk_unresolved shared_effect_var_name_general (* TODO TEMPORARY *) None
                         `Rigid
                     in
 
