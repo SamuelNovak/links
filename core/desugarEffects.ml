@@ -220,6 +220,8 @@ module RowVarMap (* : ROW_VAR_MAP *) = struct
   let map : ('a -> 'b) -> 'a t -> 'b t = fun f m -> IntMap.map f m
   let iter = IntMap.iter
 
+  let iter = IntMap.iter
+
   (* let remove : key -> 'a t -> 'a t = fun k m ->
    *   let var = get_var k in
    *   IntMap.remove var m *)
@@ -250,15 +252,19 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
   let node = SourceCode.WithPos.node dt in
   match node with
   | Function _
-  | Lolli _ ->
-      true
+    | Lolli _ ->
+     true
   | TypeApplication (tycon, _) -> (
-    let param_kinds, _has_implicit_effect = SEnv.find tycon tycon_env in
+    let param_kinds, _has_implicit_effect =
+      try
+        SEnv.find tycon tycon_env
+      with NotFound _ -> raise (Errors.UnboundTyCon (SourceCode.WithPos.pos dt, tycon))
+    in
     (* TODO sugar will apply to any effect rows, not just the last one
        (though the last one is the row that can be omitted) *)
-      match ListUtils.last_opt param_kinds with
-      | Some (PrimaryKind.Row, (_, Restriction.Effect)) -> true
-      | _ -> false )
+    match ListUtils.last_opt param_kinds with
+    | Some (PrimaryKind.Row, (_, Restriction.Effect)) -> true
+    | _ -> false )
   (* TODO: in the original version, this was true for every tycon with a Row var with restriction effect as the last param *)
   | _ -> false
 
@@ -275,14 +281,11 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
       TODO: do we actually want this to happen?
     - If we're an anonymous variable in a row, remap to "$". (For instance,
       ` -_->` becomes `-$eff->`. *)
-
-(* TODO force-unify all same-wildedness effects (waaaait????) *)
+(* TODO update the comment above *)
 let cleanup_effects tycon_env =
   let has_effect_sugar = has_effect_sugar () in
   (object (self)
      inherit SugarTraversals.map as super
-
-     val is_implicit_wild : bool option = None
 
      method! datatype dt =
        let open Datatype in
@@ -290,7 +293,7 @@ let cleanup_effects tycon_env =
        let { pos; node = t } = dt in
        let do_fun a e r =
          let a = self#list (fun o -> o#datatype) a in
-         (* TODO there needs to be a decision here based on wildedness *)
+         (* TODO there needs to be a decision here based on wildedness; does it? *)
          let has_shared = may_have_shared_eff tycon_env r in
          let e = self#effect_row ~allow_shared:(* (not has_shared) *)true e in
          let r = self#datatype r in
@@ -305,8 +308,12 @@ let cleanup_effects tycon_env =
              let a, e, r = do_fun a e r in
              Lolli (a, e, r)
          | TypeApplication (name, ts) ->
-             let tycon_info = SEnv.find_opt name tycon_env in
-             let rec go =
+            let tycon_info =
+              try
+                SEnv.find_opt name tycon_env
+              with NotFound _ -> raise (Errors.UnboundTyCon (pos, name))
+            in
+            let rec go =
                (* We don't know if the arities match up yet (nor the final arities
                   of the definitions), so we handle mismatches, assuming spare rows
                   are effects.
@@ -346,7 +353,7 @@ let cleanup_effects tycon_env =
               as op
                  when not (TypeUtils.is_builtin_effect name) -> (
               print_endline ("effect_row -> fields -> function, not builtin: " ^ name);
-                (* Elaborates `Op : a -> b' to `Op : a {}-> b' *)
+                (* (ω) Elaborates `Op : a -> b' to `Op : a {}-> b' *)
                 match (rv, fields) with
                 | Closed, [] -> op
                 | Open _, []
@@ -360,7 +367,7 @@ let cleanup_effects tycon_env =
                 | _, _ -> raise (unexpected_effects_on_abstract_op pos name) )
             | name, Present node when not (TypeUtils.is_builtin_effect name) ->
                print_endline ("effect_row -> fields -> other, not builtin: " ^ name);
-               (* Elaborates `Op : a' to `Op : () {}-> a' *)
+               (* (ω) Elaborates `Op : a' to `Op : () {}-> a' *)
                ( name,
                  Present
                    (SourceCode.WithPos.make ~pos:node.pos
@@ -394,6 +401,7 @@ let cleanup_effects tycon_env =
                            then shared_effect_var_name_wild
                            else shared_effect_var_name_tame
             in
+            (* remap `$' to `$eff_(wild|tame)' *)
             let stv' = SugarTypeVar.mk_unresolved eff_name None `Rigid in
             Datatype.Open stv'
          (* | Datatype.Open stv
@@ -413,6 +421,8 @@ let cleanup_effects tycon_env =
 
 (** Gathers some information about type names, used for later analysis.
     Precondition: cleanup_effects ran on this type. *)
+(* TODO maybe extend this to the wild/tame system? it's only being
+   used in the main traversal though *)
 let gather_mutual_info (tycon_env : simple_tycon_env) =
   (object
      inherit SugarTraversals.fold as super
@@ -501,6 +511,9 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
         List.fold_left (fun o sq -> o#replace sq operations) o qs
 
       method add (var : SugarTypeVar.t) op =
+        (* a wild is not handled, because even with sugar the arrows
+           have to match; TODO what about hear? *)
+        (* TODO all effect rows will be relevant (future) *)
         if TypeUtils.is_builtin_effect op || not (RowVarMap.is_relevant var)
         then self
         else
@@ -517,31 +530,31 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
         let { pos; node = t } = dt in
         match t with
         | Function (a, e, t)
-        | Lolli (a, e, t) ->
-            let o = self#list (fun o -> o#datatype) a in
-            let o = o#effect_row e in
-            let o = o#datatype t in
-            o
+          | Lolli (a, e, t) ->
+           let o = self#list (fun o -> o#datatype) a in
+           let o = o#effect_row e in
+           let o = o#datatype t in
+           o
         | TypeApplication (name, ts) -> (
-            let tycon_info = SEnv.find_opt name tycon_env in
-            let rec go o =
-              (* We don't know if the arities match up yet, so we handle
-                    mismatches, assuming spare rows are effects. *)
-              function
-              | _, [] -> o
-              | (PrimaryKind.Row, (_, Restriction.Effect)) :: qs, Row t :: ts ->
-                  go (o#effect_row t) (qs, ts)
-              | (([] as qs) | _ :: qs), t :: ts -> go (o#type_arg t) (qs, ts)
-            in
-            match tycon_info with
-            | Some (params, _has_implict_eff) -> go self (params, ts)
-            | None -> raise (Errors.UnboundTyCon (pos, name)) )
+          let tycon_info = SEnv.find_opt name tycon_env in
+          let rec go o =
+            (* We don't know if the arities match up yet, so we handle
+               mismatches, assuming spare rows are effects. *)
+            function
+            | _, [] -> o
+            | (PrimaryKind.Row, (_, Restriction.Effect)) :: qs, Row t :: ts ->
+               go (o#effect_row t) (qs, ts)
+            | (([] as qs) | _ :: qs), t :: ts -> go (o#type_arg t) (qs, ts)
+          in
+          match tycon_info with
+          | Some (params, _has_implict_eff) -> go self (params, ts)
+          | None -> raise (Errors.UnboundTyCon (pos, name)) )
         | Mu (v, t) ->
-            let mtv = SugarTypeVar.get_resolved_type_exn v in
-            let var, (_, sk) = unpack_var_id (Unionfind.find mtv) in
-            let q : Quantifier.t = (var, (pk_type, sk)) in
-            let sq = SugarQuantifier.mk_resolved q in
-            self#quantified (fun o -> o#datatype t) [ sq ]
+           let mtv = SugarTypeVar.get_resolved_type_exn v in
+           let var, (_, sk) = unpack_var_id (Unionfind.find mtv) in
+           let q : Quantifier.t = (var, (pk_type, sk)) in
+           let sq = SugarQuantifier.mk_resolved q in
+           self#quantified (fun o -> o#datatype t) [ sq ]
         | Forall (qs, t) -> self#quantified (fun o -> o#datatype t) qs
         | _ -> super#datatype dt
 
@@ -549,38 +562,44 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
         let open Datatype in
         function
         | Closed
-        | Open _ ->
-            self
+          | Open _ ->
+           self
         | Recursive (v, r) ->
-            let mtv = SugarTypeVar.get_resolved_type_exn v in
-            let var, (_, sk) = unpack_var_id (Unionfind.find mtv) in
-            let q : Quantifier.t = (var, (pk_row, sk)) in
-            let sq = SugarQuantifier.mk_resolved q in
-            self#quantified (fun o -> o#row r) [ sq ]
+           let mtv = SugarTypeVar.get_resolved_type_exn v in
+           let var, (_, sk) = unpack_var_id (Unionfind.find mtv) in
+           let q : Quantifier.t = (var, (pk_row, sk)) in
+           let sq = SugarQuantifier.mk_resolved q in
+           self#quantified (fun o -> o#row r) [ sq ]
 
       method effect_row ((fields, var) : Datatype.row) =
         let self =
           match var with
           | Datatype.Open stv ->
-              List.fold_left (fun o (op, _) -> o#add stv op) self fields
+             List.fold_left (fun o (op, _) -> o#add stv op) self fields
           | _ -> self
         in
         self#row (fields, var)
     end
   in
   if allow_fresh && has_effect_sugar () then
-    (o#datatype dt)#operations
-    |> RowVarMap.map (fun v ->
-           StringSet.fold
-             (fun op m ->
-               let point =
-                 lazy
-                   (let var = Types.fresh_raw_variable () in
-                    Unionfind.fresh (Types.Var (var, (PrimaryKind.Presence, default_subkind), `Rigid)))
-               in
-               StringMap.add op point m)
-             v StringMap.empty)
-  else RowVarMap.empty
+    begin
+      print_endline "Here";
+      (o#datatype dt)#operations
+      |> RowVarMap.map (fun v ->
+             StringSet.fold
+               (fun op m ->
+                 let point =
+                   lazy
+                     (let var = Types.fresh_raw_variable () in
+                      Unionfind.fresh (Types.Var (var, (PrimaryKind.Presence, default_subkind), `Rigid)))
+                 in
+                 StringMap.add op point m)
+               v StringMap.empty)
+    end
+  else begin
+      print_endline "Empty";
+      RowVarMap.empty
+    end
 
 let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
   =
