@@ -293,8 +293,9 @@ let cleanup_effects tycon_env =
        let { pos; node = t } = dt in
        let do_fun a e r =
          let a = self#list (fun o -> o#datatype) a in
-         (* TODO there needs to be a decision here based on wildedness; does it? *)
-         let has_shared = may_have_shared_eff tycon_env r in
+         (* let has_shared = may_have_shared_eff tycon_env r in *)
+         (* TODO the following has to be true, independently of what `r` is,
+            so that the sharing between arrows and aliases can work *)
          let e = self#effect_row ~allow_shared:(* (not has_shared) *)true e in
          let r = self#datatype r in
          (a, e, r)
@@ -326,7 +327,7 @@ let cleanup_effects tycon_env =
                    Row (self#effect_row ~allow_shared:false (* ??? *) t) :: go ([], ts)
                | (PrimaryKind.Row, (_, Restriction.Effect)) :: qs, Row t :: ts
                  ->
-                   Row (self#effect_row ~allow_shared:false (* ??? *) t) :: go (qs, ts)
+                   Row (self#effect_row ~allow_shared:true(* false *) (* TODO ‽‽‽ *) t) :: go (qs, ts)
                | (([] as qs) | _ :: qs), t :: ts ->
                    self#type_arg t :: go (qs, ts)
              in
@@ -637,18 +638,6 @@ let preprocess_type (dt : Datatype.with_pos) tycon_env allow_fresh shared_effect
   (dt, row_operations, shared_effect)
 
 
-let propagate_operations simple_tycon_env operations =
-  let o =
-    object (o : 'self_type)
-      inherit SugarTraversals.map as super
-
-
-    end
-  in
-  fun (dt : Datatype.with_pos) ->
-  o#datatype dt
-
-
 class main_traversal simple_tycon_env =
   object (o : 'self_type)
     inherit SugarTraversals.fold_map as super
@@ -859,12 +848,11 @@ class main_traversal simple_tycon_env =
                && is_shared_effect_var_name (SugarTypeVar.get_unresolved_name_exn stv) -> (
             match shared_effect with
             | None -> raise (shared_effect_forbidden_here dpos)
-            | Some s ->
+            | Some s -> (* TODO here for multiple implicit effects *)
                 (o, D.Open (Lazy.force s |> SugarTypeVar.mk_resolved_row)) )
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
                && DesugarTypeVariables.is_anonymous stv ->
-           print_endline "HERE (EXPECT ERROR)";
             if not allow_implictly_bound_vars then
               raise (DesugarTypeVariables.free_type_variable dpos);
 
