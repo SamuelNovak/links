@@ -1070,6 +1070,7 @@ efields:
 /* | fields_def(efield, erow_var, kinded_row_var)                  { $1 } */
 /* fields_def(field_prod, row_var_prod, kinded_row_var_prod): */
 | efield                                                   { ([$1], Datatype.Closed   ) }
+| DOT                                                      { ( [] , Datatype.DotClosed) }
 | soption(efield) VBARDOT                                  { ( $1 , Datatype.DotClosed) }
 | soption(efield) VBAR DOT                                 { ( $1 , Datatype.DotClosed) }
 | soption(efield) VBAR row_var                             { ( $1 , $3                ) }
