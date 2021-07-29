@@ -1995,16 +1995,131 @@ module Policy = struct
                 |> sync)
 
   let effect_sugar
-  = Settings.(flag "effect_sugar"
-              |> synopsis "Toggles the effect sugar in pretty printer."
-              |> convert parse_bool
-              |> sync)
+    = Settings.(flag "effect_sugar"
+                |> synopsis "Toggles the effect sugar in pretty printer."
+                |> convert parse_bool
+                |> sync)
 
-  type t = { quantifiers  : bool
-           ; flavours     : bool
-           ; hide_fresh   : bool
-           ; kinds        : kind_policy
-           ; effect_sugar : bool }
+  module EffectSugar : sig
+                                       (* vvvvvvvvvvvvvvvvvvvvvv TODO name; for now it's the One Effect To Rule Them All *)
+    type opt = PresenceOmit | AliasOmit | ArrowsShowTheOneEffect | ArrowsCurriedCollectionAssumeFresh | ContractOperationArrows | OpenDefault | DifferentOperationArrows
+    type t = opt list
+    val default : unit -> t
+
+    val presence_omit              : t -> bool
+    val alias_omit                 : t -> bool
+    val arrows_show_the_one        : t -> bool
+    val arrows_collection_fresh    : t -> bool
+    val contract_operation_arrows  : t -> bool
+    val open_default               : t -> bool
+    val different_operation_arrows : t -> bool
+  end = struct
+    type opt = PresenceOmit | AliasOmit | ArrowsShowTheOneEffect | ArrowsCurriedCollectionAssumeFresh | ContractOperationArrows | OpenDefault | DifferentOperationArrows
+    type t = opt list
+    let default_opts = [PresenceOmit ; AliasOmit ; ContractOperationArrows ; ArrowsCurriedCollectionAssumeFresh ]
+    let all_opts = [PresenceOmit ; AliasOmit ; ArrowsShowTheOneEffect ; ArrowsCurriedCollectionAssumeFresh ; ContractOperationArrows ; OpenDefault ; DifferentOperationArrows ]
+
+    let show_opt : opt -> string
+      = function
+      | PresenceOmit             -> "presence_omit"
+      | ArrowsShowTheOneEffect   -> "arrows_show_the_one_effect"
+      | ArrowsCurriedCollectionAssumeFresh -> "arrows_curried_collection_assume_fresh"
+      | AliasOmit                -> "alias_omit"
+      | ContractOperationArrows  -> "contract_operation_arrows"
+      | OpenDefault              -> "open_default"
+      | DifferentOperationArrows -> "different_operation_arrows"
+    let string_of_opts = Settings.string_of_paths -<- List.map show_opt
+
+    let parse_opts : string -> opt list
+      = let parse_opt : string -> opt
+          = fun s ->
+          match String.lowercase_ascii s with
+          | "presence_omit" | "pres"
+            -> PresenceOmit
+          | "arrows_show_the_one_effect"
+            -> ArrowsShowTheOneEffect
+          | "arrows_curried_collection_assume_fresh" | "ccf"
+            -> ArrowsCurriedCollectionAssumeFresh
+          | "alias_omit" | "alias"
+            -> AliasOmit
+          | "contract_operation_arrows" | "contract"
+            -> ContractOperationArrows
+          | "open_default" | "|.}"
+            -> OpenDefault
+          | "different_operation_arrows" | "->>"
+            -> DifferentOperationArrows
+          | _ -> failwith ("Invalid option: " ^ s)
+        in
+        let is_correct : opt list -> bool
+          = not -<- ListUtils.has_duplicates
+        in
+        fun s ->
+        match String.lowercase_ascii s with
+        | "none"    -> []
+        | "default" -> default_opts
+        | "all"     -> all_opts
+        | _ -> let lst = List.map parse_opt (Settings.parse_paths s) in
+               if is_correct lst then lst
+               else failwith "Options cannot be duplicated."
+
+    let syno
+      = let fst = "Fine grained control over effect sugar (only works when \
+                   effect_sugar = true)." in
+        let lines =
+          [  "Options (shortcuts in [brackets]):"
+           ; " * presence_omit [pres]: omit presence polymorphic operations"
+           ; "   within effect rows (1)"
+           ; " * alias_omit [alias]: hide empty (1) shared effect rows in last"
+           ; "   argument of aliases"
+           ; " * arrows_show_the_one_effect: display the imlicit shared effect"
+           ; "   on arrows"
+           ; " * arrows_curried_collection_assume_fresh [ccf]: in curried"
+           ; "   functions, collection arrows are assumed to have fresh"
+           ; "   effects and these are hidden"
+           ; " * contract_operation_arrows [contract]: contract operations"
+           ; "   `E:() {}-> a' to `E:a'"
+           ; " * open_default [|.}]: effect rows are open by default,"
+           ; "   closed with syntax { |.}"
+           ; " * different_operation_arrows [->>]: operation arrow will be"
+           ; "   syntactically differentiated"
+           ; "Meta-options:"
+           ; " * none: turn all of the above off"
+           ; " * default: revert to default value"
+           ; " * all: turn all of the options on"]
+        in
+        let buf = Buffer.create 800 in
+        let indent = String.make 15 ' ' in
+        Buffer.add_string buf fst;
+        List.iter (fun x -> Buffer.add_string buf "\n";
+                            Buffer.add_string buf indent;
+                            Buffer.add_string buf x) lines;
+        Buffer.contents buf
+
+    let sugar_specifics : opt list Settings.setting
+      = Settings.(multi_option ~default:default_opts "effect_sugar_policy"
+                  |> synopsis syno
+                  |> hint "list of options or a meta-option, see help"
+                  |> to_string string_of_opts
+                  |> convert parse_opts
+                  |> sync)
+
+    let presence_omit              = List.mem PresenceOmit
+    let alias_omit                 = List.mem AliasOmit
+    let arrows_show_the_one        = List.mem ArrowsShowTheOneEffect
+    let arrows_collection_fresh    = List.mem ArrowsCurriedCollectionAssumeFresh
+    let contract_operation_arrows  = List.mem ContractOperationArrows
+    let open_default               = List.mem OpenDefault
+    let different_operation_arrows = List.mem DifferentOperationArrows
+
+    let default () = Settings.get sugar_specifics
+  end
+
+  type t = { quantifiers        : bool
+           ; flavours           : bool
+           ; hide_fresh         : bool
+           ; kinds              : kind_policy
+           ; effect_sugar       : bool
+           ; es_policy          : EffectSugar.t }
 
   let default_policy : unit -> t =
     fun () ->
@@ -2012,11 +2127,12 @@ module Policy = struct
       | None -> failwith "Invalid value of setting show_kinds."
       | Some s -> s
     in
-    { quantifiers  = Settings.get show_quantifiers
-    ; flavours     = Settings.get show_flavours
-    ; hide_fresh   = Settings.get hide_fresh_type_vars
-    ; kinds        = kp
-    ; effect_sugar = Settings.get effect_sugar }
+    { quantifiers        = Settings.get show_quantifiers
+    ; flavours           = Settings.get show_flavours
+    ; hide_fresh         = Settings.get hide_fresh_type_vars
+    ; kinds              = kp
+    ; effect_sugar       = Settings.get effect_sugar
+    ; es_policy          = EffectSugar.default () }
 
   let quantifiers : t -> bool
     = fun p -> p.quantifiers
@@ -2028,6 +2144,8 @@ module Policy = struct
     = fun p -> p.kinds
   let effect_sugar : t -> bool
     = fun p -> p.effect_sugar
+  let es_policy : t -> EffectSugar.t
+    = fun p -> p.es_policy
 
   let set_quantifiers : bool -> t -> t
     = fun v p -> { p with quantifiers = v }
@@ -2039,6 +2157,8 @@ module Policy = struct
     = fun v p -> { p with kinds = v }
   let set_effect_sugar : bool -> t -> t
     = fun v p -> { p with effect_sugar = v }
+  let set_es_policy : EffectSugar.t -> t -> t
+    = fun v p -> { p with es_policy = v }
 end
 
 type names = (tid, string * Vars.spec) Hashtbl.t
@@ -2566,17 +2686,17 @@ module RoundtripPrinter : PRETTY_PRINTER = struct
                  | Binder
                  [@@deriving show]
 
-    type t = { policy: Policy.t
-             ; bound_vars: TypeVarSet.t
-             ; tyvar_names: names
-             ; ambient: ambient
-             ; shared_effect: int option }
+    type t = { policy                 : Policy.t
+             ; bound_vars             : TypeVarSet.t
+             ; tyvar_names            : names
+             ; ambient                : ambient
+             ; implicit_shared_effect : tid option }
 
-    let empty () = { policy        = Policy.default_policy ()
-                   ; bound_vars    = TypeVarSet.empty
-                   ; tyvar_names   = Hashtbl.create 0
-                   ; ambient       = Toplevel
-                   ; shared_effect = None }
+    let empty () = { policy                 = Policy.default_policy ()
+                   ; bound_vars             = TypeVarSet.empty
+                   ; tyvar_names            = Hashtbl.create 0
+                   ; ambient                = Toplevel
+                   ; implicit_shared_effect = None }
 
 
     let with_policy : Policy.t -> t -> t
