@@ -1067,15 +1067,10 @@ vfield:
 | CONSTRUCTOR fieldspec                                        { ($1, $2)      }
 
 efields:
-/* | fields_def(efield, erow_var, kinded_row_var)                  { $1 } */
-/* fields_def(field_prod, row_var_prod, kinded_row_var_prod): */
-| efield                                                   { ([$1], Datatype.Closed   ) }
-| DOT                                                      { ( [] , Datatype.DotClosed) }
-| soption(efield) VBARDOT                                  { ( $1 , Datatype.DotClosed) }
-| soption(efield) VBAR DOT                                 { ( $1 , Datatype.DotClosed) }
-| soption(efield) VBAR row_var                             { ( $1 , $3                ) }
-| soption(efield) VBAR kinded_row_var                      { ( $1 , $3                ) }
-| efield COMMA efields                                     { ( $1::fst $3, snd $3     ) }
+| fields_def(efield, row_var, kinded_row_var)                  { $1 }
+| DOT                                                          { ( [] , Datatype.DotClosed) }
+| soption(efield) VBARDOT                                      { ( $1 , Datatype.DotClosed) }
+| soption(efield) VBAR DOT                                     { ( $1 , Datatype.DotClosed) }
 
 
 efield:
