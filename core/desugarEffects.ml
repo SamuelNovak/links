@@ -267,6 +267,12 @@ let cleanup_effects tycon_env =
   (object (self)
      inherit SugarTraversals.map as super
 
+     (* Need this so that open_default does not modify operation arrows:
+        E:(a) { empty | Closed }-> b should !not! change to
+        E:(a) { empty | Open fresh }-> b *)
+     val in_effect_fields : bool = false
+     method set_in_effect_fields in_effect_fields = {< in_effect_fields >}
+
      method! datatype dt =
        let open Datatype in
        let open SourceCode.WithPos in
@@ -333,6 +339,11 @@ let cleanup_effects tycon_env =
                when not (TypeUtils.is_builtin_effect name) -> (
                  (* Elaborates `Op : a -> b' to `Op : a {}-> b' *)
                  match (rv, fields) with
+                 | DotClosed, [] ->
+                    ( name,
+                      Present
+                        (SourceCode.WithPos.make ~pos
+                           (Function (domain, ([], Closed), codomain))))
                  | Closed, [] -> op
                  | Open _, []
                  | Recursive _, [] ->
@@ -368,7 +379,9 @@ let cleanup_effects tycon_env =
                 && gue stv = ("$", None, `Rigid) ->
              let stv' = SugarTypeVar.mk_unresolved "$eff" None `Rigid in
              Datatype.Open stv'
-         | Datatype.Closed when has_effect_sugar && open_default ->
+         | Datatype.Closed when has_effect_sugar
+                                && open_default
+                                && (not in_effect_fields) ->
             let stv = SugarTypeVar.mk_unresolved "$eff" None `Rigid in
             Datatype.Open stv
          | Datatype.DotClosed ->
