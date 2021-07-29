@@ -270,8 +270,8 @@ let cleanup_effects tycon_env =
      (* Need this so that open_default does not modify operation arrows:
         E:(a) { empty | Closed }-> b should !not! change to
         E:(a) { empty | Open fresh }-> b *)
-     val in_effect_fields : bool = false
-     method set_in_effect_fields in_effect_fields = {< in_effect_fields >}
+     (* val in_effect_fields : bool = false
+      * method set_in_effect_fields in_effect_fields = {< in_effect_fields >} *)
 
      method! datatype dt =
        let open Datatype in
@@ -331,35 +331,36 @@ let cleanup_effects tycon_env =
        let open SourceCode.WithPos in
        let fields =
          List.map
-           (function
-             | ( name,
-                 Present
-                   { node = Function (domain, (fields, rv), codomain); pos } )
-               as op
-               when not (TypeUtils.is_builtin_effect name) -> (
-                 (* Elaborates `Op : a -> b' to `Op : a {}-> b' *)
-                 match (rv, fields) with
-                 | DotClosed, [] ->
-                    ( name,
-                      Present
-                        (SourceCode.WithPos.make ~pos
-                           (Function (domain, ([], Closed), codomain))))
-                 | Closed, [] -> op
-                 | Open _, []
-                 | Recursive _, [] ->
-                     (* might need an extra check on recursive rows *)
-                     ( name,
-                       Present
-                         (SourceCode.WithPos.make ~pos
-                            (Function (domain, ([], Closed), codomain))) )
-                 | _, _ -> raise (unexpected_effects_on_abstract_op pos name) )
-             | name, Present node when not (TypeUtils.is_builtin_effect name) ->
-                 (* Elaborates `Op : a' to `Op : () {}-> a' *)
-                 ( name,
-                   Present
-                     (SourceCode.WithPos.make ~pos:node.pos
-                        (Function ([], ([], Closed), node))) )
-             | x -> x)
+           (fun (name, fspec) ->
+             let name = self#name name in
+             let fspec =
+               match fspec with
+               | Present { node = Function (domain, (fields, rv), codomain) ; pos }
+                    when not (TypeUtils.is_builtin_effect name) ->
+                  begin
+                    (* Elaborates `Op : a -> b' to `Op : a {}-> b'
+                       and rewrites `Op : a {.}-> b' to `Op : a {}-> b' *)
+                    let domain = self#list (fun o dt -> o#datatype dt) domain in
+                    let codomain = self#datatype codomain in
+                    let () = match (fields, rv) with
+                      | [], Closed
+                        | [], Open _
+                        | [], DotClosed -> ()
+                      (* TODO possibly error if DotClosed and  not open_default? *)
+                      | _, _ -> raise (unexpected_effects_on_abstract_op pos name)
+                    in
+                    Present (SourceCode.WithPos.make ~pos
+                               (Function (domain, ([], Closed), codomain)))
+                  end
+               | Present node when not (TypeUtils.is_builtin_effect name) ->
+                  (* Elaborates `Op : a' to `Op : () {}-> a' *)
+                  Present
+                    (SourceCode.WithPos.make ~pos:node.pos
+                       (Function ([], ([], Closed), node)))
+               | x -> x
+             in
+             (name, fspec)
+           )
            fields
        in
        let gue = SugarTypeVar.get_unresolved_exn in
@@ -381,7 +382,7 @@ let cleanup_effects tycon_env =
              Datatype.Open stv'
          | Datatype.Closed when has_effect_sugar
                                 && open_default
-                                && (not in_effect_fields) ->
+                                (* && (not in_effect_fields) *) ->
             let stv = SugarTypeVar.mk_unresolved "$eff" None `Rigid in
             Datatype.Open stv
          | Datatype.DotClosed ->
@@ -389,7 +390,10 @@ let cleanup_effects tycon_env =
             Datatype.Closed
          | _ -> var
        in
-       self#row (fields, var)
+       (* let self = self#set_in_effect_fields true in
+        * self#row (fields, var) *)
+       let var = self#row_var var in
+       (fields, var)
   end)
     #datatype
 
