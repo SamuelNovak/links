@@ -1656,6 +1656,9 @@ let hear = "hear"
 let wild_present   = (wild, Present unit_type)
 let hear_present t = (hear, Present t)
 
+let is_builtin_effect lbl =
+  lbl = wild || lbl = hear
+
 
 (* precondition: the row is unwrapped *)
 let is_tuple ?(allow_onetuples=false) row =
