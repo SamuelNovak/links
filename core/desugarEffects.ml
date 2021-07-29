@@ -47,6 +47,9 @@ The following steps are only performed when effect_sugar is enabled:
 let shared_effect_var_name = "$eff"
 
 let has_effect_sugar () = Types.Policy.effect_sugar (Types.Policy.default_policy ())
+let open_default () =
+  let open Types.Policy in
+  EffectSugar.open_default (es_policy (default_policy ()))
 
 let internal_error message =
   Errors.internal_error ~filename:"desugarEffects.ml" ~message
@@ -260,6 +263,7 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
 *)
 let cleanup_effects tycon_env =
   let has_effect_sugar = has_effect_sugar () in
+  let open_default = open_default () in
   (object (self)
      inherit SugarTraversals.map as super
 
@@ -516,6 +520,7 @@ let gather_operations (tycon_env : simple_tycon_env) allow_fresh dt =
             let q : Quantifier.t = (var, (pk_row, sk)) in
             let sq = SugarQuantifier.mk_resolved q in
             self#quantified (fun o -> o#row r) [ sq ]
+        | DotClosed -> raise (internal_error "DotClosed is not legal anymore, it should have been handled by cleanup")
 
       method effect_row ((fields, var) : Datatype.row) =
         let self =
@@ -764,6 +769,7 @@ class main_traversal simple_tycon_env =
       let o, rv =
         match rv with
         | D.Closed -> (o, rv)
+        | D.DotClosed -> raise (internal_error "DotClosed is not legal anymore, it should have been handled by cleanup")
         | D.Open stv
           when (not (SugarTypeVar.is_resolved stv))
                && SugarTypeVar.get_unresolved_name_exn stv
