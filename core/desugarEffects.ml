@@ -253,7 +253,7 @@ let may_have_shared_eff (tycon_env : simple_tycon_env) dt =
       right of an arrow/typename chain) then remap to "$". For instance,
       `(a) -> (b) -> c` becomes `(a) -$-> (b) -$-> c`.
    - If we're an anonymous variable in a row, remap to "$". (For instance,
-      ` -_->` becomes `-$eff->`. 
+      ` -_->` becomes `-$eff->`.
 
   Also this cleans up the effect row closing - depending on EffectSugar.open_default:
   - if open_default     => { Closed    -> Open with $ or $eff
